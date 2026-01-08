@@ -1,0 +1,69 @@
+name: Django Tests (Postgres)
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: erpweb
+          POSTGRES_USER: erpuser
+          POSTGRES_PASSWORD: erppass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U erpuser -d erpweb"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      DATABASE_URL: postgres://erpuser:erppass@localhost:5432/erpweb
+
+      DB_NAME: erpweb
+      DB_USER: erpuser
+      DB_PASSWORD: erppass
+      DB_HOST: localhost
+      DB_PORT: "5432"
+
+      DJANGO_SETTINGS_MODULE: ERPWeb.settings
+
+    defaults:
+      run:
+        working-directory: ERPWeb
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Django system check
+        run: |
+          python manage.py check
+
+      - name: Apply migrations (sanity)
+        run: |
+          python manage.py migrate --noinput
+
+      - name: Run core ERP tests
+        run: |
+          python manage.py test finance purchases sales stock security -v 2
+
+      - name: Run full test suite
+        run: |
+          python manage.py test -v 2
