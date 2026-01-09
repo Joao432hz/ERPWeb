@@ -21,19 +21,35 @@ jobs:
           --health-cmd="pg_isready -U erpuser -d erpweb"
           --health-interval=10s
           --health-timeout=5s
-          --health-retries=5
+          --health-retries=10
 
     env:
-      DATABASE_URL: postgres://erpuser:erppass@localhost:5432/erpweb
+      # Django
+      DJANGO_SETTINGS_MODULE: config.settings
+      PYTHONUNBUFFERED: "1"
 
+      # Tu set actual
       DB_NAME: erpweb
       DB_USER: erpuser
       DB_PASSWORD: erppass
-      DB_HOST: localhost
+      DB_HOST: 127.0.0.1
       DB_PORT: "5432"
 
-      DJANGO_SETTINGS_MODULE: config.settings
-      PYTHONUNBUFFERED: "1"
+      # Aliases comunes (por si settings.py usa otros nombres)
+      DB_PASS: erppass
+      POSTGRES_DB: erpweb
+      POSTGRES_USER: erpuser
+      POSTGRES_PASSWORD: erppass
+
+      # Para drivers / herramientas
+      PGDATABASE: erpweb
+      PGUSER: erpuser
+      PGPASSWORD: erppass
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+
+      # (Opcional) URL si tu settings soporta DATABASE_URL
+      DATABASE_URL: postgres://erpuser:erppass@127.0.0.1:5432/erpweb
 
     defaults:
       run:
