@@ -10,7 +10,9 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -79,17 +81,71 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 
 
-# Database
-DATABASES = {
-    "default": {
+# -----------------------
+# Database (CI-proof)
+# -----------------------
+def _env(*names, default=None):
+    """
+    Devuelve la primera env var encontrada (en orden).
+    """
+    for n in names:
+        v = os.getenv(n)
+        if v not in (None, ""):
+            return v
+    return default
+
+
+def _db_from_database_url(database_url: str):
+    """
+    Soporta DATABASE_URL estilo:
+    postgres://user:pass@host:5432/dbname
+    """
+    u = urlparse(database_url)
+    if u.scheme not in ("postgres", "postgresql"):
+        return None
+
+    name = (u.path or "").lstrip("/") or "erpweb"
+    return {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": "erpweb",
-        "USER": "erpuser",
-        "PASSWORD": "erpweb123",
-        "HOST": "localhost",
-        "PORT": "5432",
+        "NAME": name,
+        "USER": u.username or "erpuser",
+        "PASSWORD": u.password or "",
+        "HOST": u.hostname or "127.0.0.1",
+        "PORT": str(u.port or 5432),
+        "CONN_MAX_AGE": 0,
     }
-}
+
+
+DATABASE_URL = _env("DATABASE_URL", default=None)
+db_from_url = _db_from_database_url(DATABASE_URL) if DATABASE_URL else None
+
+if db_from_url:
+    DATABASES = {"default": db_from_url}
+else:
+    DB_NAME = _env("DB_NAME", "POSTGRES_DB", "PGDATABASE", default="erpweb")
+    DB_USER = _env("DB_USER", "POSTGRES_USER", "PGUSER", default="erpuser")
+    DB_PASSWORD = _env(
+        "DB_PASSWORD",
+        "DB_PASS",
+        "POSTGRES_PASSWORD",
+        "PGPASSWORD",
+        default="erpweb123",  # fallback local: tu pass actual
+    )
+    # IMPORTANTÍSIMO: 127.0.0.1 evita que en CI intente ::1
+    DB_HOST = _env("DB_HOST", "POSTGRES_HOST", "PGHOST", default="127.0.0.1")
+    DB_PORT = _env("DB_PORT", "POSTGRES_PORT", "PGPORT", default="5432")
+
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": DB_NAME,
+            "USER": DB_USER,
+            "PASSWORD": DB_PASSWORD,
+            "HOST": DB_HOST,
+            "PORT": DB_PORT,
+            "CONN_MAX_AGE": 0,
+        }
+    }
 
 
 # Password validation
