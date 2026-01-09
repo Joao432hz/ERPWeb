@@ -1,0 +1,50 @@
+{% extends "ui/base.html" %}
+{% block title %}Productos | ERPWeb{% endblock %}
+
+{% block content %}
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <div>
+      <h1 class="h4 mb-1">Stock · Productos</h1>
+      <div class="text-muted small">Listado de productos y búsqueda rápida.</div>
+    </div>
+  </div>
+
+  <form class="row g-2 mb-3" method="get">
+    <div class="col-12 col-md-6 col-lg-4">
+      <input class="form-control" name="q" value="{{ q }}" placeholder="Buscar por nombre o SKU...">
+    </div>
+    <div class="col-12 col-md-auto">
+      <button class="btn btn-primary" type="submit">Buscar</button>
+      <a class="btn btn-outline-secondary" href="{% url 'ui:stock_products' %}">Limpiar</a>
+    </div>
+  </form>
+
+  <div class="card">
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-striped mb-0 align-middle">
+          <thead class="table-light">
+            <tr>
+              <th>SKU</th>
+              <th>Producto</th>
+              <th class="text-end">Stock</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in products %}
+              <tr>
+                <td class="text-muted">{{ p.sku }}</td>
+                <td>{{ p.name }}</td>
+                <td class="text-end">{{ p.stock }}</td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="3" class="text-center text-muted py-4">Sin resultados</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endblock %}

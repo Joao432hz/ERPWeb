@@ -1,10 +1,8 @@
 from functools import wraps
 from django.http import JsonResponse
-from django.shortcuts import redirect
+from django.shortcuts import redirect, render
 from django.urls import reverse
 
-
-# Paths que SIEMPRE deben ser públicos (sin RBAC)
 PUBLIC_PATH_PREFIXES = (
     "/accounts/login/",
     "/accounts/logout/",
@@ -13,48 +11,49 @@ PUBLIC_PATH_PREFIXES = (
     "/media/",
 )
 
-
 def _is_public_path(path: str) -> bool:
     if not path:
         return False
     return any(path.startswith(p) for p in PUBLIC_PATH_PREFIXES)
 
+def _wants_html(request) -> bool:
+    accept = (request.headers.get("Accept") or "").lower()
+    # browsers suelen mandar text/html, o */*
+    return ("text/html" in accept) or ("*/*" in accept)
 
 def require_permission(perm_code: str):
     """
     RBAC decorator:
-    - Si el path es público (login/logout/static/etc), no aplica RBAC.
-    - Si no está autenticado:
-        - Para requests tipo browser (HTML): redirect a login con next
-        - Para API: 401 JSON
-    - Si no tiene permiso: 403 JSON (como ya tenés validado)
+    - Public paths: no aplica RBAC
+    - No autenticado:
+        - HTML => redirect login con next
+        - API  => 401 JSON
+    - Sin permiso:
+        - HTML => forbidden.html (403)
+        - API  => 403 JSON
     """
     def decorator(view_func):
         @wraps(view_func)
         def _wrapped(request, *args, **kwargs):
-            # ✅ 0) Whitelist público (crítico para que login funcione)
             if _is_public_path(getattr(request, "path", "")):
                 return view_func(request, *args, **kwargs)
 
             user = getattr(request, "user", None)
 
-            # ✅ 1) No autenticado
+            # 1) No autenticado
             if not user or not user.is_authenticated:
-                # Heurística simple: si el cliente espera HTML, redirigimos
-                accept = (request.headers.get("Accept") or "").lower()
-                if "text/html" in accept or "*/*" in accept:
-                    login_url = reverse("login") if "login" in [u.name for u in request.resolver_match.app_names] else "/accounts/login/"
+                if _wants_html(request):
+                    login_url = reverse("login")
                     return redirect(f"{login_url}?next={request.path}")
                 return JsonResponse({"detail": "Unauthorized"}, status=401)
 
-            # ✅ 2) Superuser: pasa todo
+            # 2) Superuser: pasa todo
             if getattr(user, "is_superuser", False):
                 return view_func(request, *args, **kwargs)
 
-            # ✅ 3) Validación RBAC (tu lógica actual)
-            # IMPORTANTE: acá respetamos tu arquitectura: roles -> permisos
+            # 3) Validación RBAC
             try:
-                from security.models import UserRole, RolePermission, Permission
+                from security.models import RolePermission
             except Exception:
                 return JsonResponse({"detail": "RBAC not available"}, status=500)
 
@@ -65,6 +64,13 @@ def require_permission(perm_code: str):
             ).exists()
 
             if not has_perm:
+                if _wants_html(request):
+                    return render(
+                        request,
+                        "ui/forbidden.html",
+                        {"required_permission": perm_code},
+                        status=403,
+                    )
                 return JsonResponse({"detail": "Forbidden - missing permission"}, status=403)
 
             return view_func(request, *args, **kwargs)

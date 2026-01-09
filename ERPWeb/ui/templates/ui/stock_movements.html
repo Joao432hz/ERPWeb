@@ -1,0 +1,44 @@
+{% extends "ui/base.html" %}
+{% block title %}Movimientos | ERPWeb{% endblock %}
+
+{% block content %}
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <div>
+      <h1 class="h4 mb-1">Stock · Movimientos</h1>
+      <div class="text-muted small">Últimos 200 movimientos registrados.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-striped mb-0 align-middle">
+          <thead class="table-light">
+            <tr>
+              <th>Fecha</th>
+              <th>Producto</th>
+              <th class="text-end">Cantidad</th>
+              <th>Tipo</th>
+              <th class="text-muted">Referencia</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for m in movements %}
+              <tr>
+                <td class="text-muted">{{ m.created_at }}</td>
+                <td>{{ m.product.name }}</td>
+                <td class="text-end">{{ m.quantity }}</td>
+                <td>{{ m.movement_type }}</td>
+                <td class="text-muted">{{ m.source_type }} #{{ m.source_id }}</td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="5" class="text-center text-muted py-4">Sin movimientos</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endblock %}

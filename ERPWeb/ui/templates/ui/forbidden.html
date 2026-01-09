@@ -1,0 +1,12 @@
+{% extends "ui/base.html" %}
+
+{% block content %}
+<div class="container py-5">
+  <div class="alert alert-warning">
+    <h4 class="alert-heading">Acceso restringido</h4>
+    <p>No tenés permisos para acceder a esta sección.</p>
+    <hr>
+    <a href="{% url 'ui:dashboard' %}" class="btn btn-primary">Volver al Dashboard</a>
+  </div>
+</div>
+{% endblock %}

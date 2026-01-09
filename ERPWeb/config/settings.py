@@ -17,11 +17,32 @@ from urllib.parse import urlparse
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+# -----------------------
+# Helpers
+# -----------------------
+def _env(*names, default=None):
+    """
+    Devuelve la primera env var encontrada (en orden).
+    """
+    for n in names:
+        v = os.getenv(n)
+        if v not in (None, ""):
+            return v
+    return default
+
+
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-ieaiut*)s=m7+10wv^8dbu+5lxnv)hvm_+w!4#j2zlx_1jku6+"
+# ✅ Permite override por env sin romper local (si no está, usa el valor actual)
+SECRET_KEY = _env(
+    "DJANGO_SECRET_KEY",
+    "SECRET_KEY",
+    default="django-insecure-ieaiut*)s=m7+10wv^8dbu+5lxnv)hvm_+w!4#j2zlx_1jku6+",
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# ✅ Permite override por env sin romper local (si no está, queda True como hoy)
+DEBUG = str(_env("DJANGO_DEBUG", "DEBUG", default="True")).lower() in ("1", "true", "yes", "y", "on")
 
 # Dev local: permite acceder por 127.0.0.1 / localhost sin errores
 ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
@@ -35,6 +56,9 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+
+    # UI (Frontend ERP)
+    "ui",
 
     # Apps del proyecto
     "security",
@@ -66,13 +90,15 @@ TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
         "DIRS": [BASE_DIR / "templates"],  # ✅ para templates/registration/login.html
-        "APP_DIRS": True,
+        "APP_DIRS": True,  # ✅ incluye templates dentro de apps (ej: ui/templates/)
         "OPTIONS": {
             "context_processors": [
                 "django.template.context_processors.debug",
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "security.context_processors.perm_keys",
+
             ],
         },
     },
@@ -84,17 +110,6 @@ WSGI_APPLICATION = "config.wsgi.application"
 # -----------------------
 # Database (CI-proof)
 # -----------------------
-def _env(*names, default=None):
-    """
-    Devuelve la primera env var encontrada (en orden).
-    """
-    for n in names:
-        v = os.getenv(n)
-        if v not in (None, ""):
-            return v
-    return default
-
-
 def _db_from_database_url(database_url: str):
     """
     Soporta DATABASE_URL estilo:
@@ -172,6 +187,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
 # Auth redirects
-# ✅ Evita que usuarios operativos caigan en 403 post-login si no tienen permiso a /security/dashboard/
-LOGIN_REDIRECT_URL = "/stock/products/"
+# ✅ Ahora el login lleva al Dashboard UI (root "/")
+LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/accounts/login/"
+
