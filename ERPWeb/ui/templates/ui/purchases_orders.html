@@ -3,8 +3,20 @@
 {% block title %}Compras · Órdenes | ERPWeb{% endblock %}
 
 {% block content %}
-<h2 class="h4 mb-1">Compras · Órdenes</h2>
-<p class="text-muted mb-3">Listado (MVP). Entrá al detalle para confirmar / recibir / cancelar.</p>
+<div class="d-flex align-items-start justify-content-between gap-3 flex-wrap">
+  <div>
+    <h2 class="h4 mb-1">Compras · Órdenes</h2>
+    <p class="text-muted mb-3">Listado (MVP). Entrá al detalle para confirmar / recibir / cancelar.</p>
+  </div>
+
+  {% if can_purchases_create %}
+    <div>
+      <a class="btn btn-success" href="{% url 'ui:purchases_order_create' %}">
+        + Nueva OC
+      </a>
+    </div>
+  {% endif %}
+</div>
 
 <form class="row g-2 mb-3" method="get">
   <div class="col-12 col-md-6">
@@ -35,7 +47,7 @@
             <td>{{ o.id }}</td>
             <td>{{ o.supplier.name }}</td>
             <td>{{ o.status }}</td>
-            <td class="text-end">{{ o.total_amount }}</td>
+            <td class="text-end">{{ o.ui_total }}</td>
             <td>{{ o.created_at }}</td>
             <td class="text-end">
               <a class="btn btn-sm btn-outline-primary" href="{% url 'ui:purchases_order_detail' o.id %}">

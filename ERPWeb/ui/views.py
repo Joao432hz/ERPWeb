@@ -1,9 +1,13 @@
+from decimal import Decimal, InvalidOperation
+
 from django.contrib.auth.decorators import login_required
-from django.shortcuts import render, get_object_or_404, redirect
-from django.db.models import Q
-from django.views.decorators.http import require_POST
-from django.db import transaction
 from django.contrib import messages
+from django.db import transaction
+from django.db.models import Q
+from django.http import JsonResponse
+from django.shortcuts import render, get_object_or_404, redirect
+from django.utils import timezone
+from django.views.decorators.http import require_POST, require_http_methods
 
 from security.models import RolePermission
 from stock.models import Product, StockMovement
@@ -38,6 +42,7 @@ def _base_context(user):
         "can_finance": (is_super or "finance.movement.view" in perm_keys),
 
         # Compras actions (para botones)
+        "can_purchases_create": (is_super or "purchases.order.create" in perm_keys),
         "can_purchases_confirm": (is_super or "purchases.order.confirm" in perm_keys),
         "can_purchases_receive": (is_super or "purchases.order.receive" in perm_keys),
         "can_purchases_cancel": (is_super or "purchases.order.cancel" in perm_keys),
@@ -56,6 +61,45 @@ def _has_perm(request, code: str) -> bool:
         return True
     perm_keys = _user_perm_keys(request.user)
     return code in perm_keys
+
+
+def _as_decimal(v):
+    if v is None:
+        return None
+    if isinstance(v, Decimal):
+        return v
+    try:
+        return Decimal(str(v))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def _money_str(val: Decimal) -> str:
+    if val is None:
+        return ""
+    q = val.quantize(Decimal("0.01"))
+    return f"{q:.2f}"
+
+
+def _product_purchase_cost(product: Product) -> Decimal:
+    # Campo ya agregado a Product
+    val = _as_decimal(getattr(product, "purchase_cost", None))
+    if val is None:
+        raise ValueError("El producto no tiene purchase_cost válido.")
+    return val
+
+
+def _po_line_fk_name(PurchaseOrderLine, PurchaseOrder) -> str:
+    """
+    Detecta el nombre real del ForeignKey desde PurchaseOrderLine -> PurchaseOrder.
+    Evita asumir 'order' / 'purchase_order' etc.
+    """
+    for f in PurchaseOrderLine._meta.fields:
+        # FK a PurchaseOrder
+        rel = getattr(f, "remote_field", None)
+        if rel and getattr(rel, "model", None) == PurchaseOrder:
+            return f.name
+    raise ValueError("No se encontró FK desde PurchaseOrderLine hacia PurchaseOrder.")
 
 
 @login_required
@@ -123,7 +167,7 @@ def purchases_order_detail(request, pk: int):
     if not _has_perm(request, "purchases.order.view"):
         return _forbidden(request, required_permission="purchases.order.view")
 
-    from purchases.models import PurchaseOrder  # ya sabemos que existe si llegamos acá normalmente
+    from purchases.models import PurchaseOrder
 
     po = get_object_or_404(
         PurchaseOrder.objects.select_related("supplier", "created_by", "confirmed_by", "received_by")
@@ -195,6 +239,144 @@ def purchases_order_cancel(request, pk: int):
             messages.error(request, f"No se pudo cancelar PO#{pk}: {e}")
 
     return redirect("ui:purchases_order_detail", pk=pk)
+
+
+# ===============================
+# ✅ API UI: Autocomplete Products
+# ===============================
+
+@login_required
+@require_http_methods(["GET"])
+def products_search(request):
+    # No exigimos stock.product.view para compras, pero si querés, lo podés gatear.
+    q = (request.GET.get("q") or "").strip()
+    if len(q) < 2:
+        return JsonResponse({"items": []})
+
+    qs = (
+        Product.objects.filter(is_active=True)
+        .filter(Q(name__icontains=q) | Q(sku__icontains=q))
+        .order_by("name")[:10]
+    )
+
+    items = []
+    for p in qs:
+        try:
+            cost = _product_purchase_cost(p)
+            cost_str = _money_str(cost)
+        except Exception:
+            cost_str = None
+
+        items.append(
+            {
+                "id": p.id,
+                "label": f"{p.name} ({p.sku})",
+                "sku": p.sku,
+                "cost": cost_str,
+            }
+        )
+    return JsonResponse({"items": items})
+
+
+@login_required
+@require_http_methods(["GET"])
+def product_detail(request, pk: int):
+    p = get_object_or_404(Product, pk=pk, is_active=True)
+    try:
+        cost = _money_str(_product_purchase_cost(p))
+    except Exception:
+        cost = None
+    return JsonResponse(
+        {
+            "id": p.id,
+            "label": f"{p.name} ({p.sku})",
+            "sku": p.sku,
+            "cost": cost,
+        }
+    )
+
+
+# ===============================
+# ✅ UI: Crear OC (Nueva OC)
+# ===============================
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def purchases_order_create(request):
+    if not _has_perm(request, "purchases.order.create"):
+        return _forbidden(request, required_permission="purchases.order.create")
+
+    context = _base_context(request.user)
+
+    from purchases.models import Supplier, PurchaseOrder, PurchaseOrderLine
+    from ui.forms import PurchaseOrderCreateForm, PurchaseOrderLineFormSet
+
+    suppliers = Supplier.objects.filter(is_active=True).order_by("name")
+    form = PurchaseOrderCreateForm(
+        data=request.POST or None,
+        suppliers_qs=suppliers,
+    )
+    formset = PurchaseOrderLineFormSet(request.POST or None, prefix="form")
+
+    if request.method == "POST":
+        if form.is_valid() and formset.is_valid():
+            supplier_id = form.cleaned_data["supplier_id"]
+            note = (form.cleaned_data.get("note") or "").strip()
+
+            try:
+                with transaction.atomic():
+                    po = PurchaseOrder.objects.create(
+                        supplier_id=supplier_id,
+                        note=note,
+                        created_by=request.user,
+                    )
+
+                    # ✅ FK real detectado (no asumimos 'order')
+                    fk_name = _po_line_fk_name(PurchaseOrderLine, PurchaseOrder)
+
+                    # Crear líneas
+                    for f in formset.forms:
+                        cd = f.cleaned_data or {}
+                        if cd.get("DELETE"):
+                            continue
+
+                        product_id = cd.get("product_id")
+                        qty = cd.get("quantity")
+
+                        if not product_id or not qty:
+                            continue
+
+                        product = Product.objects.get(pk=product_id, is_active=True)
+                        unit_cost = _product_purchase_cost(product)
+
+                        # ✅ bloquear costo 0.00 (tu prueba)
+                        if unit_cost <= 0:
+                            raise ValueError(f"El producto {product.sku} no tiene costo de compra (> 0).")
+
+                        kwargs = {
+                            fk_name: po,
+                            "product": product,
+                            "quantity": qty,
+                            "unit_cost": unit_cost,
+                        }
+                        PurchaseOrderLine.objects.create(**kwargs)
+
+                messages.success(request, f"OC creada en DRAFT: PO#{po.id}")
+                return redirect("ui:purchases_order_detail", pk=po.id)
+
+            except Exception as e:
+                messages.error(request, f"No se pudo crear la OC: {e}")
+
+        else:
+            messages.error(request, "Revisá los errores del formulario.")
+
+    context.update(
+        {
+            "form": form,
+            "formset": formset,
+        }
+    )
+    return render(request, "ui/purchases_order_create.html", context)
 
 
 # ======= Mantengo placeholders existentes (Ventas/Finanzas) =======

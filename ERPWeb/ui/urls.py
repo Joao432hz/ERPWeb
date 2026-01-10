@@ -15,6 +15,7 @@ urlpatterns = [
 
     # Compras / Ventas / Finanzas (UI mínimo)
     path("ui/purchases/orders/", views.purchases_orders, name="purchases_orders"),
+    path("ui/purchases/orders/new/", views.purchases_order_create, name="purchases_order_create"),
     path("ui/sales/orders/", views.sales_orders, name="sales_orders"),
     path("ui/finance/movements/", views.finance_movements, name="finance_movements"),
 
@@ -23,5 +24,8 @@ urlpatterns = [
     path("ui/purchases/orders/<int:pk>/confirm/", views.purchases_order_confirm, name="purchases_order_confirm"),
     path("ui/purchases/orders/<int:pk>/receive/", views.purchases_order_receive, name="purchases_order_receive"),
     path("ui/purchases/orders/<int:pk>/cancel/", views.purchases_order_cancel, name="purchases_order_cancel"),
-]
 
+    # ✅ API UI: products autocomplete + detail
+    path("ui/api/products/search/", views.products_search, name="products_search"),
+    path("ui/api/products/<int:pk>/", views.product_detail, name="product_detail"),
+]

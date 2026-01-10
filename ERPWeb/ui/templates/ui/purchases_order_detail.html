@@ -9,7 +9,7 @@
     <div class="text-muted">
       Proveedor: <strong>{{ po.supplier.name }}</strong>
       · Estado: <strong>{{ po.status }}</strong>
-      · Total: <strong>{{ po.total_amount }}</strong>
+      · Total: <strong>{{ po_total }}</strong>
     </div>
   </div>
 
@@ -103,7 +103,7 @@
               <td>{{ ln.product.name }}</td>
               <td class="text-end">{{ ln.quantity }}</td>
               <td class="text-end">{{ ln.unit_cost }}</td>
-              <td class="text-end">{{ ln.line_total }}</td>
+              <td class="text-end">{{ ln.ui_line_total }}</td>
             </tr>
           {% empty %}
             <tr><td colspan="5" class="text-muted">Sin líneas.</td></tr>

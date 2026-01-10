@@ -1,0 +1,332 @@
+{% extends "ui/base.html" %}
+
+{% block title %}Compras · Nueva OC | ERPWeb{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-start justify-content-between gap-3 flex-wrap">
+  <div>
+    <h2 class="h4 mb-1">Compras · Nueva Orden de Compra</h2>
+    <p class="text-muted mb-0">
+      Escribí el producto y seleccioná desde las sugerencias. El <strong>costo unitario</strong> se completa automático desde la base.
+    </p>
+  </div>
+  <div>
+    <a class="btn btn-outline-secondary" href="{% url 'ui:purchases_orders' %}">Volver</a>
+  </div>
+</div>
+
+{% if messages %}
+  <div class="mt-3">
+    {% for message in messages %}
+      <div class="alert {% if message.tags %}alert-{{ message.tags }}{% else %}alert-info{% endif %} mb-2">
+        {{ message }}
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
+
+<form method="post" class="mt-3">
+  {% csrf_token %}
+
+  <div class="card mb-3">
+    <div class="card-body">
+      <h3 class="h6 mb-3">Encabezado</h3>
+
+      {% if form.non_field_errors %}
+        <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+      {% endif %}
+
+      <div class="row g-3">
+        <div class="col-12 col-lg-6">
+          <label class="form-label">{{ form.supplier.label }}</label>
+          {{ form.supplier }}
+          {% if form.supplier.errors %}
+            <div class="text-danger small mt-1">{{ form.supplier.errors }}</div>
+          {% endif %}
+        </div>
+
+        <div class="col-12 col-lg-6">
+          <label class="form-label">{{ form.note.label }}</label>
+          {{ form.note }}
+          {% if form.note.errors %}
+            <div class="text-danger small mt-1">{{ form.note.errors }}</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      <h3 class="h6 mb-3">Líneas</h3>
+
+      {% if formset.non_form_errors %}
+        <div class="alert alert-danger">{{ formset.non_form_errors }}</div>
+      {% endif %}
+
+      {{ formset.management_form }}
+
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead>
+            <tr>
+              <th>Producto</th>
+              <th class="text-end">Cantidad</th>
+              <th class="text-end">Costo unit.</th>
+              <th class="text-end">Eliminar</th>
+            </tr>
+          </thead>
+          <tbody id="lines-tbody">
+            {% for f in formset.forms %}
+              <tr class="line-row" data-row-prefix="{{ f.prefix }}">
+                <td style="min-width: 360px;">
+                  <div class="position-relative">
+                    {{ f.product_query }}
+                    {{ f.product_id }}
+                    {{ f.unit_cost_display }}
+                  </div>
+                  {% if f.product_id.errors %}
+                    <div class="text-danger small mt-1">{{ f.product_id.errors }}</div>
+                  {% endif %}
+                </td>
+
+                <td class="text-end" style="max-width: 140px;">
+                  {{ f.quantity }}
+                  {% if f.quantity.errors %}
+                    <div class="text-danger small mt-1">{{ f.quantity.errors }}</div>
+                  {% endif %}
+                </td>
+
+                <td class="text-end" style="max-width: 220px;">
+                  <div class="fw-semibold" data-unit-cost-text>—</div>
+                  <div class="small text-muted">Auto (DB)</div>
+                </td>
+
+                <td class="text-end" style="max-width: 120px;">
+                  {{ f.DELETE }}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="d-flex gap-2">
+        <button type="button" class="btn btn-outline-primary" id="add-line-btn">+ Agregar línea</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="d-flex gap-2 mt-3">
+    <button class="btn btn-success">Guardar OC</button>
+    <a class="btn btn-outline-secondary" href="{% url 'ui:purchases_orders' %}">Cancelar</a>
+  </div>
+</form>
+
+<script>
+(function() {
+  const SEARCH_URL = "{% url 'ui:products_search' %}";
+  const DETAIL_URL_BASE = "{% url 'ui:product_detail' 1 %}".replace("/1/", "/"); // hack: base path
+
+  // ✅ Un solo “dropdown” global, montado en <body> con position:fixed (no lo corta ningún overflow)
+  const dropdown = document.createElement("div");
+  dropdown.className = "list-group shadow";
+  dropdown.style.position = "fixed";
+  dropdown.style.zIndex = "99999";
+  dropdown.style.maxHeight = "260px";
+  dropdown.style.overflow = "auto";
+  dropdown.style.display = "none";
+  dropdown.style.background = "white";
+  document.body.appendChild(dropdown);
+
+  let active = null; // { row, input, productId, costHidden, costText }
+
+  function debounce(fn, ms) {
+    let t = null;
+    return function(...args) {
+      clearTimeout(t);
+      t = setTimeout(() => fn.apply(this, args), ms);
+    }
+  }
+
+  function hideDropdown() {
+    dropdown.style.display = "none";
+    dropdown.innerHTML = "";
+    active = null;
+  }
+
+  function placeDropdownUnder(inputEl) {
+    const r = inputEl.getBoundingClientRect();
+    dropdown.style.left = r.left + "px";
+    dropdown.style.top = r.bottom + "px";
+    dropdown.style.width = r.width + "px";
+  }
+
+  async function fetchProductDetail(productId) {
+    const url = `${DETAIL_URL_BASE}${productId}/`;
+    const res = await fetch(url, { headers: {"X-Requested-With": "XMLHttpRequest"} });
+    if (!res.ok) return null;
+    return await res.json();
+  }
+
+  async function restoreCostIfSelected(rowCtx) {
+    const pid = (rowCtx.productId.value || "").trim();
+    if (!pid) return;
+    // Si ya hay costo visible, no hacemos nada
+    if (rowCtx.costText && rowCtx.costText.textContent && rowCtx.costText.textContent !== "—") return;
+
+    const data = await fetchProductDetail(pid);
+    if (!data || !data.cost) return;
+
+    rowCtx.costText.textContent = `$${data.cost}`;
+    if (rowCtx.costHidden) rowCtx.costHidden.value = data.cost;
+  }
+
+  async function searchAndRender() {
+    if (!active) return;
+    const q = (active.input.value || "").trim();
+    if (q.length < 2) {
+      hideDropdown();
+      return;
+    }
+
+    try {
+      const res = await fetch(`${SEARCH_URL}?q=${encodeURIComponent(q)}`, {
+        headers: {"X-Requested-With": "XMLHttpRequest"}
+      });
+      if (!res.ok) {
+        hideDropdown();
+        return;
+      }
+      const data = await res.json();
+      const items = (data && data.items) ? data.items : [];
+      if (!items.length) {
+        hideDropdown();
+        return;
+      }
+
+      dropdown.innerHTML = "";
+      items.forEach(it => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "list-group-item list-group-item-action";
+        btn.textContent = it.label + (it.cost ? ` · $${it.cost}` : "");
+        btn.addEventListener("click", () => {
+          // set selection
+          active.input.value = it.label;
+          active.productId.value = it.id;
+
+          // costo visible (solo texto)
+          active.costText.textContent = it.cost ? `$${it.cost}` : "—";
+
+          // costo hidden (por si querés mantenerlo)
+          if (active.costHidden) active.costHidden.value = it.cost || "";
+
+          hideDropdown();
+        });
+        dropdown.appendChild(btn);
+      });
+
+      placeDropdownUnder(active.input);
+      dropdown.style.display = "block";
+    } catch (e) {
+      hideDropdown();
+    }
+  }
+
+  const debouncedSearch = debounce(searchAndRender, 160);
+
+  function setupRow(row) {
+    const prefix = row.getAttribute("data-row-prefix");
+    const queryInput = row.querySelector(`input[name="${prefix}-product_query"]`);
+    const productIdInput = row.querySelector(`input[name="${prefix}-product_id"]`);
+    const costHidden = row.querySelector(`input[name="${prefix}-unit_cost_display"]`);
+    const costText = row.querySelector("[data-unit-cost-text]");
+
+    const rowCtx = { row, input: queryInput, productId: productIdInput, costHidden, costText };
+
+    // ✅ al cargar/re-render (por error) repone costo si ya hay product_id
+    restoreCostIfSelected(rowCtx);
+
+    // Al escribir: invalidamos selección previa
+    queryInput.addEventListener("input", () => {
+      productIdInput.value = "";
+      if (costHidden) costHidden.value = "";
+      if (costText) costText.textContent = "—";
+    });
+
+    queryInput.addEventListener("focus", () => {
+      active = rowCtx;
+      placeDropdownUnder(queryInput);
+      debouncedSearch();
+    });
+
+    queryInput.addEventListener("keyup", () => {
+      active = rowCtx;
+      placeDropdownUnder(queryInput);
+      debouncedSearch();
+    });
+
+    window.addEventListener("scroll", () => {
+      if (active && active.input === queryInput && dropdown.style.display === "block") {
+        placeDropdownUnder(queryInput);
+      }
+    }, { passive: true });
+  }
+
+  // setup inicial
+  document.querySelectorAll("tr.line-row").forEach(setupRow);
+
+  // cerrar dropdown al click afuera o escape
+  document.addEventListener("click", (ev) => {
+    if (!dropdown.contains(ev.target) && !(active && active.row.contains(ev.target))) {
+      hideDropdown();
+    }
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") hideDropdown();
+  });
+
+  // Agregar línea (clonado + reindex)
+  const btn = document.getElementById("add-line-btn");
+  const tbody = document.getElementById("lines-tbody");
+
+  function updateTotalForms(newCount) {
+    const totalForms = document.getElementById("id_form-TOTAL_FORMS");
+    if (totalForms) totalForms.value = String(newCount);
+  }
+
+  btn.addEventListener("click", function() {
+    const rows = tbody.querySelectorAll("tr.line-row");
+    const last = rows[rows.length - 1];
+    const clone = last.cloneNode(true);
+
+    const newIndex = rows.length;
+    const oldPrefix = clone.getAttribute("data-row-prefix");
+    const newPrefix = `form-${newIndex}`;
+    clone.setAttribute("data-row-prefix", newPrefix);
+
+    clone.querySelectorAll("input, select, textarea, label").forEach(el => {
+      if (el.name) el.name = el.name.replace(oldPrefix, newPrefix);
+      if (el.id) el.id = el.id.replace(oldPrefix, newPrefix);
+      if (el.htmlFor) el.htmlFor = el.htmlFor.replace(oldPrefix, newPrefix);
+    });
+
+    // Limpiar valores
+    clone.querySelectorAll("input").forEach(el => {
+      if (el.type === "checkbox") el.checked = false;
+      else el.value = "";
+    });
+
+    const costText = clone.querySelector("[data-unit-cost-text]");
+    if (costText) costText.textContent = "—";
+
+    clone.querySelectorAll(".text-danger").forEach(el => el.remove());
+
+    tbody.appendChild(clone);
+    updateTotalForms(rows.length + 1);
+    setupRow(clone);
+  });
+})();
+</script>
+{% endblock %}

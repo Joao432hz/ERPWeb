@@ -1,5 +1,8 @@
+from decimal import Decimal
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.db import models, transaction
 from django.db.models import Q, Sum
 from django.utils import timezone
@@ -27,6 +30,17 @@ class Product(models.Model):
         help_text="Cantidad actual en stock (no puede ser negativa)",
     )
 
+    # ✅ Costo de compra (para Órdenes de Compra)
+    # - Retrocompatible: default 0.00 para productos existentes
+    # - Regla de negocio: en Compras, si queda en 0.00, no se debería permitir confirmar/usar (ya lo validamos en UI/OC)
+    purchase_cost = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        validators=[MinValueValidator(Decimal("0.00"))],
+        help_text="Costo unitario de compra (>= 0). Se usa en Órdenes de Compra.",
+    )
+
     is_active = models.BooleanField(
         default=True,
         db_index=True,
@@ -44,6 +58,11 @@ class Product(models.Model):
             models.CheckConstraint(
                 name="stock_product_stock_non_negative",
                 check=Q(stock__gte=0),
+            ),
+            # ✅ costo no negativo (permitimos 0.00 para carga progresiva)
+            models.CheckConstraint(
+                name="stock_product_purchase_cost_non_negative",
+                check=Q(purchase_cost__gte=0),
             ),
         ]
 
