@@ -1,0 +1,55 @@
+{% extends "ui/base.html" %}
+
+{% block title %}Compras · Órdenes | ERPWeb{% endblock %}
+
+{% block content %}
+<h2 class="h4 mb-1">Compras · Órdenes</h2>
+<p class="text-muted mb-3">Listado (MVP). Entrá al detalle para confirmar / recibir / cancelar.</p>
+
+<form class="row g-2 mb-3" method="get">
+  <div class="col-12 col-md-6">
+    <input class="form-control" name="q" value="{{ q }}" placeholder="Buscar por ID o Proveedor...">
+  </div>
+  <div class="col-auto">
+    <button class="btn btn-primary">Buscar</button>
+    <a class="btn btn-outline-secondary" href="{% url 'ui:purchases_orders' %}">Limpiar</a>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-sm mb-0 align-middle">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Proveedor</th>
+          <th>Estado</th>
+          <th class="text-end">Total</th>
+          <th>Creado</th>
+          <th class="text-end">Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in orders %}
+          <tr>
+            <td>{{ o.id }}</td>
+            <td>{{ o.supplier.name }}</td>
+            <td>{{ o.status }}</td>
+            <td class="text-end">{{ o.total_amount }}</td>
+            <td>{{ o.created_at }}</td>
+            <td class="text-end">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'ui:purchases_order_detail' o.id %}">
+                Ver
+              </a>
+            </td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="6" class="text-muted">Sin resultados.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

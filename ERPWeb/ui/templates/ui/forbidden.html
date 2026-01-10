@@ -1,12 +1,57 @@
 {% extends "ui/base.html" %}
 
+{% block title %}Acceso restringido | ERPWeb{% endblock %}
+
 {% block content %}
-<div class="container py-5">
-  <div class="alert alert-warning">
-    <h4 class="alert-heading">Acceso restringido</h4>
-    <p>No tenés permisos para acceder a esta sección.</p>
-    <hr>
-    <a href="{% url 'ui:dashboard' %}" class="btn btn-primary">Volver al Dashboard</a>
+<div class="container py-5" style="max-width: 820px;">
+  <div class="card border-0 shadow-sm">
+    <div class="card-body p-4 p-md-5">
+      <div class="d-flex align-items-start gap-3">
+        <div class="flex-shrink-0">
+          <div class="rounded-circle bg-warning-subtle d-flex align-items-center justify-content-center"
+               style="width:56px;height:56px;">
+            <i class="bi bi-shield-lock" style="font-size: 1.5rem;"></i>
+          </div>
+        </div>
+
+        <div class="flex-fill">
+          <h1 class="h4 mb-2">Acceso restringido</h1>
+          <p class="text-muted mb-3">
+            Tu usuario no tiene permisos para acceder a esta sección.
+            Si necesitás acceso, solicitá a un supervisor o administrador que habilite tu perfil.
+          </p>
+
+          {% if required_permission %}
+            <div class="alert alert-light border mb-4">
+              <div class="d-flex align-items-start gap-2">
+                <i class="bi bi-info-circle mt-1"></i>
+                <div>
+                  <div class="fw-semibold">Permiso requerido</div>
+                  <code>{{ required_permission }}</code>
+                </div>
+              </div>
+            </div>
+          {% endif %}
+
+          <div class="d-flex flex-wrap gap-2">
+            <a href="{% url 'ui:dashboard' %}" class="btn btn-primary">
+              <i class="bi bi-speedometer2"></i> Volver al Dashboard
+            </a>
+
+            <button type="button" class="btn btn-outline-secondary" onclick="history.back()">
+              <i class="bi bi-arrow-left"></i> Volver atrás
+            </button>
+          </div>
+
+          <hr class="my-4">
+
+          <div class="small text-muted">
+            Si creés que esto es un error, verificá que estés usando el usuario correcto
+            o contactá a un administrador para revisar permisos del rol asignado.
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}

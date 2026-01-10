@@ -1,0 +1,19 @@
+{% extends "ui/base.html" %}
+
+{% block title %}Módulo no disponible | ERPWeb{% endblock %}
+
+{% block content %}
+<div class="container py-4" style="max-width: 900px;">
+  <div class="alert alert-danger">
+    <h4 class="alert-heading">Módulo no disponible</h4>
+    <p class="mb-2">
+      No se pudo cargar el módulo: <strong>{{ module_name|default:"(desconocido)" }}</strong>.
+    </p>
+    <div class="small text-muted">
+      Detalle técnico: {{ detail|default:"-" }}
+    </div>
+    <hr>
+    <a href="{% url 'ui:dashboard' %}" class="btn btn-primary">Volver al Dashboard</a>
+  </div>
+</div>
+{% endblock %}

@@ -17,9 +17,17 @@ def _is_public_path(path: str) -> bool:
     return any(path.startswith(p) for p in PUBLIC_PATH_PREFIXES)
 
 def _wants_html(request) -> bool:
-    accept = (request.headers.get("Accept") or "").lower()
-    # browsers suelen mandar text/html, o */*
-    return ("text/html" in accept) or ("*/*" in accept)
+    """
+    Determina si el cliente espera HTML.
+    Regla segura:
+    - Si Accept incluye text/html => HTML
+    - Si Accept está vacío => asumimos HTML (navegadores pueden no enviar Accept en casos raros)
+    - En caso contrario => JSON (APIs / integraciones)
+    """
+    accept = (request.headers.get("Accept") or "").lower().strip()
+    if not accept:
+        return True
+    return "text/html" in accept
 
 def require_permission(perm_code: str):
     """

@@ -1,0 +1,49 @@
+{% extends "ui/base.html" %}
+
+{% block title %}Ventas · Órdenes | ERPWeb{% endblock %}
+
+{% block content %}
+<h2 class="h4 mb-1">Ventas · Órdenes</h2>
+<p class="text-muted mb-3">Listado (MVP). Búsqueda simple por ID o cliente.</p>
+
+<form class="row g-2 mb-3" method="get">
+  <div class="col-12 col-md-6">
+    <input class="form-control" name="q" value="{{ q }}" placeholder="Buscar por ID o Cliente...">
+  </div>
+  <div class="col-auto">
+    <button class="btn btn-primary">Buscar</button>
+    <a class="btn btn-outline-secondary" href="{% url 'ui:sales_orders' %}">Limpiar</a>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-sm mb-0">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Cliente</th>
+          <th>Estado</th>
+          <th class="text-end">Total</th>
+          <th>Creado</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in orders %}
+          <tr>
+            <td>{{ o.id }}</td>
+            <td>{{ o.customer_name }}</td>
+            <td>{{ o.status }}</td>
+            <td class="text-end">{{ o.total_amount }}</td>
+            <td>{{ o.created_at }}</td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="5" class="text-muted">Sin resultados.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
