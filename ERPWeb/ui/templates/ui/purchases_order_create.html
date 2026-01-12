@@ -73,6 +73,7 @@
               <th>Producto</th>
               <th class="text-end">Cantidad</th>
               <th class="text-end">Costo unit.</th>
+              <th class="text-end">Total</th>
               <th class="text-end">Eliminar</th>
             </tr>
           </thead>
@@ -102,8 +103,23 @@
                   <div class="small text-muted">Auto (DB)</div>
                 </td>
 
+                <td class="text-end" style="max-width: 220px;">
+                  <div class="fw-semibold" data-line-total-text>—</div>
+                  <div class="small text-muted">Cant. × Unit.</div>
+                </td>
+
                 <td class="text-end" style="max-width: 120px;">
-                  {{ f.DELETE }}
+                  <button
+                    type="button"
+                    class="btn btn-link p-0 line-remove-btn"
+                    aria-label="Eliminar línea"
+                    title="Eliminar"
+                    style="text-decoration:none; font-size: 16px; line-height: 1;"
+                  >❌</button>
+
+                  <span class="d-none">
+                    {{ f.DELETE }}
+                  </span>
                 </td>
               </tr>
             {% endfor %}
@@ -111,7 +127,15 @@
         </table>
       </div>
 
-      <div class="d-flex gap-2">
+      <!-- ✅ Total General (dinámico) -->
+      <div class="d-flex justify-content-end mt-2">
+        <div class="px-3 py-2 border rounded bg-light">
+          <span class="text-muted me-2">Total OC:</span>
+          <strong id="po-grand-total">$0,00</strong>
+        </div>
+      </div>
+
+      <div class="d-flex gap-2 mt-3">
         <button type="button" class="btn btn-outline-primary" id="add-line-btn">+ Agregar línea</button>
       </div>
     </div>
@@ -127,6 +151,89 @@
 (function() {
   const SEARCH_URL = "{% url 'ui:products_search' %}";
   const DETAIL_URL_BASE = "{% url 'ui:product_detail' 1 %}".replace("/1/", "/"); // hack: base path
+
+  // --- Helpers moneda / parse ---
+  function parseMoneyToFloat(s) {
+    if (s == null) return 0;
+    const cleaned = String(s).replace(/\$/g, "").replace(/\s/g, "").trim();
+    const n = parseFloat(cleaned);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function formatMoneyARS(n) {
+    try {
+      return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" }).format(n || 0);
+    } catch(e) {
+      return `$${(n || 0).toFixed(2)}`;
+    }
+  }
+
+  function getQty(row) {
+    const prefix = row.getAttribute("data-row-prefix");
+    const el = row.querySelector(`input[name="${prefix}-quantity"]`);
+    if (!el) return 0;
+    const n = parseFloat((el.value || "").trim());
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function getUnitCost(row) {
+    const prefix = row.getAttribute("data-row-prefix");
+    const hidden = row.querySelector(`input[name="${prefix}-unit_cost_display"]`);
+    if (hidden && (hidden.value || "").trim() !== "") {
+      return parseMoneyToFloat(hidden.value);
+    }
+    const txt = row.querySelector("[data-unit-cost-text]");
+    if (!txt) return 0;
+    return parseMoneyToFloat(txt.textContent);
+  }
+
+  function isDeleted(row) {
+    const del = row.querySelector('input[type="checkbox"][name$="-DELETE"]');
+    return !!(del && del.checked);
+  }
+
+  function updateLineTotal(row) {
+    const totalEl = row.querySelector("[data-line-total-text]");
+    if (!totalEl) return;
+
+    if (isDeleted(row) || row.style.display === "none") {
+      totalEl.textContent = "—";
+      return;
+    }
+
+    const qty = getQty(row);
+    const unit = getUnitCost(row);
+    const total = qty * unit;
+
+    if (!qty || !unit) {
+      totalEl.textContent = "—";
+      return;
+    }
+
+    totalEl.textContent = formatMoneyARS(total);
+  }
+
+  function updateGrandTotal() {
+    let sum = 0;
+    document.querySelectorAll("tr.line-row").forEach((row) => {
+      if (row.style.display === "none") return;
+      if (isDeleted(row)) return;
+
+      const qty = getQty(row);
+      const unit = getUnitCost(row);
+      if (!qty || !unit) return;
+
+      sum += (qty * unit);
+    });
+
+    const el = document.getElementById("po-grand-total");
+    if (el) el.textContent = formatMoneyARS(sum);
+  }
+
+  function recalcAll() {
+    document.querySelectorAll("tr.line-row").forEach(updateLineTotal);
+    updateGrandTotal();
+  }
 
   // ✅ Un solo “dropdown” global, montado en <body> con position:fixed (no lo corta ningún overflow)
   const dropdown = document.createElement("div");
@@ -172,14 +279,21 @@
   async function restoreCostIfSelected(rowCtx) {
     const pid = (rowCtx.productId.value || "").trim();
     if (!pid) return;
-    // Si ya hay costo visible, no hacemos nada
-    if (rowCtx.costText && rowCtx.costText.textContent && rowCtx.costText.textContent !== "—") return;
+
+    if (rowCtx.costText && rowCtx.costText.textContent && rowCtx.costText.textContent !== "—") {
+      updateLineTotal(rowCtx.row);
+      updateGrandTotal();
+      return;
+    }
 
     const data = await fetchProductDetail(pid);
     if (!data || !data.cost) return;
 
     rowCtx.costText.textContent = `$${data.cost}`;
     if (rowCtx.costHidden) rowCtx.costHidden.value = data.cost;
+
+    updateLineTotal(rowCtx.row);
+    updateGrandTotal();
   }
 
   async function searchAndRender() {
@@ -212,17 +326,16 @@
         btn.className = "list-group-item list-group-item-action";
         btn.textContent = it.label + (it.cost ? ` · $${it.cost}` : "");
         btn.addEventListener("click", () => {
-          // set selection
           active.input.value = it.label;
           active.productId.value = it.id;
 
-          // costo visible (solo texto)
           active.costText.textContent = it.cost ? `$${it.cost}` : "—";
-
-          // costo hidden (por si querés mantenerlo)
           if (active.costHidden) active.costHidden.value = it.cost || "";
 
           hideDropdown();
+
+          updateLineTotal(active.row);
+          updateGrandTotal();
         });
         dropdown.appendChild(btn);
       });
@@ -245,14 +358,14 @@
 
     const rowCtx = { row, input: queryInput, productId: productIdInput, costHidden, costText };
 
-    // ✅ al cargar/re-render (por error) repone costo si ya hay product_id
     restoreCostIfSelected(rowCtx);
 
-    // Al escribir: invalidamos selección previa
     queryInput.addEventListener("input", () => {
       productIdInput.value = "";
       if (costHidden) costHidden.value = "";
       if (costText) costText.textContent = "—";
+      updateLineTotal(row);
+      updateGrandTotal();
     });
 
     queryInput.addEventListener("focus", () => {
@@ -267,6 +380,12 @@
       debouncedSearch();
     });
 
+    const qtyInput = row.querySelector(`input[name="${prefix}-quantity"]`);
+    if (qtyInput) {
+      qtyInput.addEventListener("input", () => { updateLineTotal(row); updateGrandTotal(); });
+      qtyInput.addEventListener("change", () => { updateLineTotal(row); updateGrandTotal(); });
+    }
+
     window.addEventListener("scroll", () => {
       if (active && active.input === queryInput && dropdown.style.display === "block") {
         placeDropdownUnder(queryInput);
@@ -275,7 +394,8 @@
   }
 
   // setup inicial
-  document.querySelectorAll("tr.line-row").forEach(setupRow);
+  document.querySelectorAll("tr.line-row").forEach((r) => setupRow(r));
+  recalcAll();
 
   // cerrar dropdown al click afuera o escape
   document.addEventListener("click", (ev) => {
@@ -296,12 +416,74 @@
     if (totalForms) totalForms.value = String(newCount);
   }
 
+  function isNewRow(row) {
+    // Si NO tiene input hidden id_form-#-id => es nueva (no persistida)
+    const prefix = row.getAttribute("data-row-prefix");
+    const idField = row.querySelector(`input[name="${prefix}-id"]`);
+    return !idField;
+  }
+
+  function markDeletedAndHide(row) {
+    const del = row.querySelector('input[type="checkbox"][name$="-DELETE"]');
+    if (del) del.checked = true;
+    row.style.display = "none";
+  }
+
+  function reindexAllRows() {
+    const rows = Array.from(tbody.querySelectorAll("tr.line-row"))
+      .filter(r => r.style.display !== "none"); // solo visibles
+
+    rows.forEach((row, idx) => {
+      const oldPrefix = row.getAttribute("data-row-prefix");
+      const newPrefix = `form-${idx}`;
+      if (oldPrefix === newPrefix) return;
+
+      row.setAttribute("data-row-prefix", newPrefix);
+
+      row.querySelectorAll("input, select, textarea, label").forEach(el => {
+        if (el.name) el.name = el.name.replace(oldPrefix, newPrefix);
+        if (el.id) el.id = el.id.replace(oldPrefix, newPrefix);
+        if (el.htmlFor) el.htmlFor = el.htmlFor.replace(oldPrefix, newPrefix);
+      });
+    });
+
+    updateTotalForms(rows.length);
+
+    // Re-setup listeners y recalcular
+    rows.forEach((row) => setupRow(row));
+    recalcAll();
+  }
+
+  // Eliminar con ❌:
+  // - si es fila original -> DELETE + hide (safe)
+  // - si es fila nueva -> remove DOM + reindex + TOTAL_FORMS (para no romper agregar)
+  document.addEventListener("click", (ev) => {
+    const b = ev.target.closest(".line-remove-btn");
+    if (!b) return;
+    const row = b.closest("tr.line-row");
+    if (!row) return;
+
+    if (isNewRow(row)) {
+      row.remove();
+      reindexAllRows();
+      return;
+    }
+
+    markDeletedAndHide(row);
+    recalcAll();
+  });
+
   btn.addEventListener("click", function() {
-    const rows = tbody.querySelectorAll("tr.line-row");
-    const last = rows[rows.length - 1];
+    const visibleRows = Array.from(tbody.querySelectorAll("tr.line-row"))
+      .filter(r => r.style.display !== "none");
+
+    // Siempre clonamos la última visible
+    const last = visibleRows[visibleRows.length - 1];
+    if (!last) return;
+
     const clone = last.cloneNode(true);
 
-    const newIndex = rows.length;
+    const newIndex = visibleRows.length;
     const oldPrefix = clone.getAttribute("data-row-prefix");
     const newPrefix = `form-${newIndex}`;
     clone.setAttribute("data-row-prefix", newPrefix);
@@ -321,11 +503,19 @@
     const costText = clone.querySelector("[data-unit-cost-text]");
     if (costText) costText.textContent = "—";
 
-    clone.querySelectorAll(".text-danger").forEach(el => el.remove());
+    const totalText = clone.querySelector("[data-line-total-text]");
+    if (totalText) totalText.textContent = "—";
+
+    // Borrar solo errores reales
+    clone.querySelectorAll("div.text-danger.small").forEach(el => el.remove());
+
+    // Asegurar visible
+    clone.style.display = "";
 
     tbody.appendChild(clone);
-    updateTotalForms(rows.length + 1);
+    updateTotalForms(visibleRows.length + 1);
     setupRow(clone);
+    recalcAll();
   });
 })();
 </script>

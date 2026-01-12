@@ -95,7 +95,6 @@ def _po_line_fk_name(PurchaseOrderLine, PurchaseOrder) -> str:
     Evita asumir 'order' / 'purchase_order' etc.
     """
     for f in PurchaseOrderLine._meta.fields:
-        # FK a PurchaseOrder
         rel = getattr(f, "remote_field", None)
         if rel and getattr(rel, "model", None) == PurchaseOrder:
             return f.name
@@ -175,10 +174,33 @@ def purchases_order_detail(request, pk: int):
         pk=pk,
     )
 
+    lines = list(po.lines.all())
+
+    # ✅ Totales: línea y orden (Decimal safe)
+    po_total = Decimal("0.00")
+    line_items = []
+    for ln in lines:
+        qty = _as_decimal(getattr(ln, "quantity", None)) or Decimal("0")
+        unit = _as_decimal(getattr(ln, "unit_cost", None)) or Decimal("0")
+        line_total = (qty * unit).quantize(Decimal("0.01"))
+        po_total += line_total
+        line_items.append(
+            {
+                "line": ln,
+                "line_total": line_total,
+                "line_total_str": _money_str(line_total),
+            }
+        )
+
+    po_total = po_total.quantize(Decimal("0.01"))
+
     context.update(
         {
             "po": po,
-            "lines": list(po.lines.all()),
+            "lines": lines,  # mantengo compatibilidad
+            "line_items": line_items,
+            "po_total": po_total,
+            "po_total_str": _money_str(po_total),
         }
     )
     return render(request, "ui/purchases_order_detail.html", context)
@@ -248,7 +270,6 @@ def purchases_order_cancel(request, pk: int):
 @login_required
 @require_http_methods(["GET"])
 def products_search(request):
-    # No exigimos stock.product.view para compras, pero si querés, lo podés gatear.
     q = (request.GET.get("q") or "").strip()
     if len(q) < 2:
         return JsonResponse({"items": []})
@@ -331,10 +352,8 @@ def purchases_order_create(request):
                         created_by=request.user,
                     )
 
-                    # ✅ FK real detectado (no asumimos 'order')
                     fk_name = _po_line_fk_name(PurchaseOrderLine, PurchaseOrder)
 
-                    # Crear líneas
                     for f in formset.forms:
                         cd = f.cleaned_data or {}
                         if cd.get("DELETE"):
@@ -349,7 +368,6 @@ def purchases_order_create(request):
                         product = Product.objects.get(pk=product_id, is_active=True)
                         unit_cost = _product_purchase_cost(product)
 
-                        # ✅ bloquear costo 0.00 (tu prueba)
                         if unit_cost <= 0:
                             raise ValueError(f"El producto {product.sku} no tiene costo de compra (> 0).")
 
@@ -362,7 +380,7 @@ def purchases_order_create(request):
                         PurchaseOrderLine.objects.create(**kwargs)
 
                 messages.success(request, f"OC creada en DRAFT: PO#{po.id}")
-                return redirect("ui:purchases_order_detail", pk=po.id)
+                return redirect("ui:purchases_orders")
 
             except Exception as e:
                 messages.error(request, f"No se pudo crear la OC: {e}")
