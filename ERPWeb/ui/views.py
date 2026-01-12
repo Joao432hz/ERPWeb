@@ -1,12 +1,14 @@
 from decimal import Decimal, InvalidOperation
+from datetime import datetime
+from urllib.parse import urlencode
 
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Q
-from django.http import JsonResponse
+from django.db.models import Q, Case, When, F
+from django.db.models.functions import Coalesce
 from django.shortcuts import render, get_object_or_404, redirect
-from django.utils import timezone
+from django.http import JsonResponse
 from django.views.decorators.http import require_POST, require_http_methods
 
 from security.models import RolePermission
@@ -82,7 +84,6 @@ def _money_str(val: Decimal) -> str:
 
 
 def _product_purchase_cost(product: Product) -> Decimal:
-    # Campo ya agregado a Product
     val = _as_decimal(getattr(product, "purchase_cost", None))
     if val is None:
         raise ValueError("El producto no tiene purchase_cost válido.")
@@ -99,6 +100,52 @@ def _po_line_fk_name(PurchaseOrderLine, PurchaseOrder) -> str:
         if rel and getattr(rel, "model", None) == PurchaseOrder:
             return f.name
     raise ValueError("No se encontró FK desde PurchaseOrderLine hacia PurchaseOrder.")
+
+
+def _parse_date_query(q: str):
+    """
+    Intenta interpretar el input del buscador como fecha.
+    Acepta:
+      -YYYY-MM-DD
+      DD/MM/YYYY
+      DD-MM-YYYY
+    Devuelve date o None.
+    """
+    if not q:
+        return None
+
+    s = q.strip()
+    fmts = ["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"]
+    for fmt in fmts:
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _po_last_modification_dt(po):
+    """
+    “Última modificación” operativa para el listado (sin tocar models):
+
+    - Si tuvo recepción -> received_at
+    - Si tuvo confirmación -> confirmed_at
+    - Si está CANCELLED -> updated_at
+    - Si sigue en DRAFT sin cambios -> None (mostrar "-")
+    """
+    received_at = getattr(po, "received_at", None)
+    if received_at:
+        return received_at
+
+    confirmed_at = getattr(po, "confirmed_at", None)
+    if confirmed_at:
+        return confirmed_at
+
+    status = getattr(po, "status", None) or ""
+    if status == "CANCELLED":
+        return getattr(po, "updated_at", None)
+
+    return None
 
 
 @login_required
@@ -152,11 +199,118 @@ def purchases_orders(request):
         return render(request, "ui/not_available.html", context, status=500)
 
     q = (request.GET.get("q") or "").strip()
-    qs = PurchaseOrder.objects.select_related("supplier").all().order_by("-id")
-    if q:
-        qs = qs.filter(Q(id__icontains=q) | Q(supplier__name__icontains=q))
 
-    context.update({"orders": qs[:200], "q": q})
+    # ✅ Sorting params (whitelist)
+    sort = (request.GET.get("sort") or "id").strip()
+    direction = (request.GET.get("dir") or "desc").strip().lower()
+    if direction not in ("asc", "desc"):
+        direction = "desc"
+
+    # Base queryset + annotation para "Últ. modif."
+    qs = (
+        PurchaseOrder.objects
+        .select_related("supplier", "created_by")
+        .annotate(
+            last_modified_dt=Coalesce(
+                F("received_at"),
+                F("confirmed_at"),
+                Case(
+                    When(status="CANCELLED", then=F("updated_at")),
+                    default=None,
+                ),
+            )
+        )
+        .all()
+    )
+
+    # Search
+    if q:
+        filters = Q()
+
+        if q.isdigit():
+            try:
+                filters |= Q(id=int(q))
+            except Exception:
+                pass
+
+        q_upper = q.strip().upper()
+        if q_upper in {"DRAFT", "CONFIRMED", "RECEIVED", "CANCELLED"}:
+            filters |= Q(status=q_upper)
+        else:
+            filters |= Q(status__icontains=q)
+
+        filters |= Q(supplier__name__icontains=q)
+        filters |= Q(created_by__username__icontains=q)
+
+        q_date = _parse_date_query(q)
+        if q_date:
+            filters |= Q(created_at__date=q_date)
+
+        qs = qs.filter(filters)
+
+    # ✅ Mapeo de sorting permitido → order_by
+    sort_map = {
+        "id": "id",
+        "supplier": "supplier__name",
+        "status": "status",
+        "created": "created_at",
+        "created_by": "created_by__username",  # ✅ NUEVO
+        "lastmod": "last_modified_dt",
+    }
+
+    sort_key = sort_map.get(sort, "id")
+    prefix = "" if direction == "asc" else "-"
+    qs = qs.order_by(f"{prefix}{sort_key}", "-id")  # tie-breaker estable
+
+    orders = list(qs[:200])
+
+    rows = []
+    for po in orders:
+        rows.append(
+            {
+                "po": po,
+                "created_by_display": (getattr(getattr(po, "created_by", None), "username", None) or "-"),
+                "last_modified_at": _po_last_modification_dt(po),
+            }
+        )
+
+    # ✅ URLs de sort para headers (preserva q)
+    def _sort_url(col: str) -> str:
+        next_dir = "asc"
+        if sort == col:
+            next_dir = "desc" if direction == "asc" else "asc"
+        params = {"q": q, "sort": col, "dir": next_dir}
+        return "?" + urlencode({k: v for k, v in params.items() if v is not None})
+
+    def _arrow(col: str) -> str:
+        if sort != col:
+            return ""
+        return "▲" if direction == "asc" else "▼"
+
+    context.update(
+        {
+            "rows": rows,
+            "q": q,
+            "sort": sort,
+            "dir": direction,
+            "sort_url": {
+                "id": _sort_url("id"),
+                "supplier": _sort_url("supplier"),
+                "status": _sort_url("status"),
+                "created": _sort_url("created"),
+                "created_by": _sort_url("created_by"),  # ✅ NUEVO
+                "lastmod": _sort_url("lastmod"),
+            },
+            "sort_arrow": {
+                "id": _arrow("id"),
+                "supplier": _arrow("supplier"),
+                "status": _arrow("status"),
+                "created": _arrow("created"),
+                "created_by": _arrow("created_by"),  # ✅ NUEVO
+                "lastmod": _arrow("lastmod"),
+            },
+        }
+    )
     return render(request, "ui/purchases_orders.html", context)
 
 
@@ -176,7 +330,6 @@ def purchases_order_detail(request, pk: int):
 
     lines = list(po.lines.all())
 
-    # ✅ Totales: línea y orden (Decimal safe)
     po_total = Decimal("0.00")
     line_items = []
     for ln in lines:
@@ -197,7 +350,7 @@ def purchases_order_detail(request, pk: int):
     context.update(
         {
             "po": po,
-            "lines": lines,  # mantengo compatibilidad
+            "lines": lines,
             "line_items": line_items,
             "po_total": po_total,
             "po_total_str": _money_str(po_total),
@@ -345,6 +498,35 @@ def purchases_order_create(request):
             note = (form.cleaned_data.get("note") or "").strip()
 
             try:
+                prepared_lines = []
+                for f in formset.forms:
+                    cd = f.cleaned_data or {}
+                    if cd.get("DELETE"):
+                        continue
+
+                    product_id = cd.get("product_id")
+                    qty = cd.get("quantity")
+
+                    if not product_id or not qty:
+                        continue
+
+                    product = Product.objects.get(pk=product_id, is_active=True)
+                    unit_cost = _product_purchase_cost(product)
+
+                    if unit_cost <= 0:
+                        raise ValueError(f"El producto {product.sku} no tiene costo de compra (> 0).")
+
+                    prepared_lines.append(
+                        {
+                            "product": product,
+                            "quantity": qty,
+                            "unit_cost": unit_cost,
+                        }
+                    )
+
+                if not prepared_lines:
+                    raise ValueError("Cargá al menos 1 línea válida.")
+
                 with transaction.atomic():
                     po = PurchaseOrder.objects.create(
                         supplier_id=supplier_id,
@@ -354,28 +536,12 @@ def purchases_order_create(request):
 
                     fk_name = _po_line_fk_name(PurchaseOrderLine, PurchaseOrder)
 
-                    for f in formset.forms:
-                        cd = f.cleaned_data or {}
-                        if cd.get("DELETE"):
-                            continue
-
-                        product_id = cd.get("product_id")
-                        qty = cd.get("quantity")
-
-                        if not product_id or not qty:
-                            continue
-
-                        product = Product.objects.get(pk=product_id, is_active=True)
-                        unit_cost = _product_purchase_cost(product)
-
-                        if unit_cost <= 0:
-                            raise ValueError(f"El producto {product.sku} no tiene costo de compra (> 0).")
-
+                    for ln in prepared_lines:
                         kwargs = {
                             fk_name: po,
-                            "product": product,
-                            "quantity": qty,
-                            "unit_cost": unit_cost,
+                            "product": ln["product"],
+                            "quantity": ln["quantity"],
+                            "unit_cost": ln["unit_cost"],
                         }
                         PurchaseOrderLine.objects.create(**kwargs)
 

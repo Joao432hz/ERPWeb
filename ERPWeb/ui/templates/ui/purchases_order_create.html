@@ -15,16 +15,6 @@
   </div>
 </div>
 
-{% if messages %}
-  <div class="mt-3">
-    {% for message in messages %}
-      <div class="alert {% if message.tags %}alert-{{ message.tags }}{% else %}alert-info{% endif %} mb-2">
-        {{ message }}
-      </div>
-    {% endfor %}
-  </div>
-{% endif %}
-
 <form method="post" class="mt-3">
   {% csrf_token %}
 
@@ -86,6 +76,11 @@
                     {{ f.product_id }}
                     {{ f.unit_cost_display }}
                   </div>
+                  {% if f.errors %}
+                    {% for e in f.non_field_errors %}
+                      <div class="text-danger small mt-1">{{ e }}</div>
+                    {% endfor %}
+                  {% endif %}
                   {% if f.product_id.errors %}
                     <div class="text-danger small mt-1">{{ f.product_id.errors }}</div>
                   {% endif %}
@@ -147,10 +142,54 @@
   </div>
 </form>
 
+{# ✅ Template robusto para crear filas incluso cuando no hay ninguna #}
+<template id="line-row-template">
+  {% with f=formset.empty_form %}
+    <tr class="line-row" data-row-prefix="{{ f.prefix }}">
+      <td style="min-width: 360px;">
+        <div class="position-relative">
+          {{ f.product_query }}
+          {{ f.product_id }}
+          {{ f.unit_cost_display }}
+        </div>
+        <span class="js-errors"></span>
+      </td>
+
+      <td class="text-end" style="max-width: 140px;">
+        {{ f.quantity }}
+      </td>
+
+      <td class="text-end" style="max-width: 220px;">
+        <div class="fw-semibold" data-unit-cost-text>—</div>
+        <div class="small text-muted">Auto (DB)</div>
+      </td>
+
+      <td class="text-end" style="max-width: 220px;">
+        <div class="fw-semibold" data-line-total-text>—</div>
+        <div class="small text-muted">Cant. × Unit.</div>
+      </td>
+
+      <td class="text-end" style="max-width: 120px;">
+        <button
+          type="button"
+          class="btn btn-link p-0 line-remove-btn"
+          aria-label="Eliminar línea"
+          title="Eliminar"
+          style="text-decoration:none; font-size: 16px; line-height: 1;"
+        >❌</button>
+
+        <span class="d-none">
+          {{ f.DELETE }}
+        </span>
+      </td>
+    </tr>
+  {% endwith %}
+</template>
+
 <script>
 (function() {
   const SEARCH_URL = "{% url 'ui:products_search' %}";
-  const DETAIL_URL_BASE = "{% url 'ui:product_detail' 1 %}".replace("/1/", "/"); // hack: base path
+  const DETAIL_URL_BASE = "{% url 'ui:product_detail' 1 %}".replace("/1/", "/"); // base path
 
   // --- Helpers moneda / parse ---
   function parseMoneyToFloat(s) {
@@ -235,7 +274,7 @@
     updateGrandTotal();
   }
 
-  // ✅ Un solo “dropdown” global, montado en <body> con position:fixed (no lo corta ningún overflow)
+  // ✅ Dropdown global (fixed, no overflow issues)
   const dropdown = document.createElement("div");
   dropdown.className = "list-group shadow";
   dropdown.style.position = "fixed";
@@ -356,6 +395,8 @@
     const costHidden = row.querySelector(`input[name="${prefix}-unit_cost_display"]`);
     const costText = row.querySelector("[data-unit-cost-text]");
 
+    if (!queryInput || !productIdInput) return;
+
     const rowCtx = { row, input: queryInput, productId: productIdInput, costHidden, costText };
 
     restoreCostIfSelected(rowCtx);
@@ -364,8 +405,13 @@
       productIdInput.value = "";
       if (costHidden) costHidden.value = "";
       if (costText) costText.textContent = "—";
+
       updateLineTotal(row);
       updateGrandTotal();
+
+      active = rowCtx;
+      placeDropdownUnder(queryInput);
+      debouncedSearch();
     });
 
     queryInput.addEventListener("focus", () => {
@@ -385,12 +431,6 @@
       qtyInput.addEventListener("input", () => { updateLineTotal(row); updateGrandTotal(); });
       qtyInput.addEventListener("change", () => { updateLineTotal(row); updateGrandTotal(); });
     }
-
-    window.addEventListener("scroll", () => {
-      if (active && active.input === queryInput && dropdown.style.display === "block") {
-        placeDropdownUnder(queryInput);
-      }
-    }, { passive: true });
   }
 
   // setup inicial
@@ -407,20 +447,26 @@
     if (ev.key === "Escape") hideDropdown();
   });
 
-  // Agregar línea (clonado + reindex)
+  // ✅ Un solo listener scroll (no uno por fila)
+  window.addEventListener("scroll", () => {
+    if (active && active.input && dropdown.style.display === "block") {
+      placeDropdownUnder(active.input);
+    }
+  }, { passive: true });
+
+  // Agregar / eliminar líneas
   const btn = document.getElementById("add-line-btn");
   const tbody = document.getElementById("lines-tbody");
+  const tpl = document.getElementById("line-row-template");
 
   function updateTotalForms(newCount) {
     const totalForms = document.getElementById("id_form-TOTAL_FORMS");
     if (totalForms) totalForms.value = String(newCount);
   }
 
-  function isNewRow(row) {
-    // Si NO tiene input hidden id_form-#-id => es nueva (no persistida)
-    const prefix = row.getAttribute("data-row-prefix");
-    const idField = row.querySelector(`input[name="${prefix}-id"]`);
-    return !idField;
+  function visibleRows() {
+    return Array.from(tbody.querySelectorAll("tr.line-row"))
+      .filter(r => r.style.display !== "none");
   }
 
   function markDeletedAndHide(row) {
@@ -430,8 +476,7 @@
   }
 
   function reindexAllRows() {
-    const rows = Array.from(tbody.querySelectorAll("tr.line-row"))
-      .filter(r => r.style.display !== "none"); // solo visibles
+    const rows = visibleRows();
 
     rows.forEach((row, idx) => {
       const oldPrefix = row.getAttribute("data-row-prefix");
@@ -449,72 +494,62 @@
 
     updateTotalForms(rows.length);
 
-    // Re-setup listeners y recalcular
     rows.forEach((row) => setupRow(row));
     recalcAll();
   }
 
-  // Eliminar con ❌:
-  // - si es fila original -> DELETE + hide (safe)
-  // - si es fila nueva -> remove DOM + reindex + TOTAL_FORMS (para no romper agregar)
+  function createRowFromTemplate(index) {
+    if (!tpl) return null;
+    const html = tpl.innerHTML.replaceAll("__prefix__", String(index));
+    const wrap = document.createElement("tbody");
+    wrap.innerHTML = html.trim();
+    const row = wrap.querySelector("tr.line-row");
+    if (!row) return null;
+
+    // Set prefix explícito
+    row.setAttribute("data-row-prefix", `form-${index}`);
+    row.querySelectorAll("input, select, textarea, label").forEach(el => {
+      if (el.name) el.name = el.name.replace(`form-${index}`, `form-${index}`);
+      if (el.id) el.id = el.id.replace(`form-${index}`, `form-${index}`);
+      if (el.htmlFor) el.htmlFor = el.htmlFor.replace(`form-${index}`, `form-${index}`);
+    });
+
+    // limpiar inputs
+    row.querySelectorAll("input").forEach(el => {
+      if (el.type === "checkbox") el.checked = false;
+      else el.value = "";
+    });
+
+    const costText = row.querySelector("[data-unit-cost-text]");
+    if (costText) costText.textContent = "—";
+
+    const totalText = row.querySelector("[data-line-total-text]");
+    if (totalText) totalText.textContent = "—";
+
+    return row;
+  }
+
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest(".line-remove-btn");
     if (!b) return;
     const row = b.closest("tr.line-row");
     if (!row) return;
 
-    if (isNewRow(row)) {
-      row.remove();
-      reindexAllRows();
-      return;
-    }
-
-    markDeletedAndHide(row);
-    recalcAll();
+    // En esta pantalla todas son nuevas (no hay id real), así que removemos y reindexamos
+    row.remove();
+    reindexAllRows();
   });
 
   btn.addEventListener("click", function() {
-    const visibleRows = Array.from(tbody.querySelectorAll("tr.line-row"))
-      .filter(r => r.style.display !== "none");
+    const rows = visibleRows();
+    const newIndex = rows.length;
 
-    // Siempre clonamos la última visible
-    const last = visibleRows[visibleRows.length - 1];
-    if (!last) return;
+    const row = createRowFromTemplate(newIndex);
+    if (!row) return;
 
-    const clone = last.cloneNode(true);
-
-    const newIndex = visibleRows.length;
-    const oldPrefix = clone.getAttribute("data-row-prefix");
-    const newPrefix = `form-${newIndex}`;
-    clone.setAttribute("data-row-prefix", newPrefix);
-
-    clone.querySelectorAll("input, select, textarea, label").forEach(el => {
-      if (el.name) el.name = el.name.replace(oldPrefix, newPrefix);
-      if (el.id) el.id = el.id.replace(oldPrefix, newPrefix);
-      if (el.htmlFor) el.htmlFor = el.htmlFor.replace(oldPrefix, newPrefix);
-    });
-
-    // Limpiar valores
-    clone.querySelectorAll("input").forEach(el => {
-      if (el.type === "checkbox") el.checked = false;
-      else el.value = "";
-    });
-
-    const costText = clone.querySelector("[data-unit-cost-text]");
-    if (costText) costText.textContent = "—";
-
-    const totalText = clone.querySelector("[data-line-total-text]");
-    if (totalText) totalText.textContent = "—";
-
-    // Borrar solo errores reales
-    clone.querySelectorAll("div.text-danger.small").forEach(el => el.remove());
-
-    // Asegurar visible
-    clone.style.display = "";
-
-    tbody.appendChild(clone);
-    updateTotalForms(visibleRows.length + 1);
-    setupRow(clone);
+    tbody.appendChild(row);
+    updateTotalForms(newIndex + 1);
+    setupRow(row);
     recalcAll();
   });
 })();

@@ -6,62 +6,99 @@
 <div class="d-flex align-items-start justify-content-between gap-3 flex-wrap">
   <div>
     <h2 class="h4 mb-1">Compras · Órdenes</h2>
-    <p class="text-muted mb-3">Listado (MVP). Entrá al detalle para confirmar / recibir / cancelar.</p>
+    <p class="text-muted mb-0">Listado (MVP). Entrá al detalle para confirmar / recibir / cancelar.</p>
   </div>
-
-  {% if can_purchases_create %}
-    <div>
-      <a class="btn btn-success" href="{% url 'ui:purchases_order_create' %}">
-        + Nueva OC
-      </a>
-    </div>
-  {% endif %}
+  <div>
+    {% if can_purchases_create %}
+      <a class="btn btn-success" href="{% url 'ui:purchases_order_create' %}">+ Nueva OC</a>
+    {% endif %}
+  </div>
 </div>
 
-<form class="row g-2 mb-3" method="get">
-  <div class="col-12 col-md-6">
-    <input class="form-control" name="q" value="{{ q }}" placeholder="Buscar por ID o Proveedor...">
-  </div>
-  <div class="col-auto">
-    <button class="btn btn-primary">Buscar</button>
+<form class="mt-3" method="get">
+  <div class="input-group">
+    <input
+      type="text"
+      name="q"
+      class="form-control"
+      placeholder="Buscar por ID, Proveedor, Estado, Usuario creador o Fecha (YYYY-MM-DD / DD/MM/YYYY)..."
+      value="{{ q }}"
+    />
+    <input type="hidden" name="sort" value="{{ sort }}">
+    <input type="hidden" name="dir" value="{{ dir }}">
+    <button class="btn btn-primary" type="submit">Buscar</button>
     <a class="btn btn-outline-secondary" href="{% url 'ui:purchases_orders' %}">Limpiar</a>
   </div>
 </form>
 
-<div class="card">
-  <div class="table-responsive">
-    <table class="table table-sm mb-0 align-middle">
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>Proveedor</th>
-          <th>Estado</th>
-          <th class="text-end">Total</th>
-          <th>Creado</th>
-          <th class="text-end">Acciones</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for o in orders %}
-          <tr>
-            <td>{{ o.id }}</td>
-            <td>{{ o.supplier.name }}</td>
-            <td>{{ o.status }}</td>
-            <td class="text-end">{{ o.ui_total }}</td>
-            <td>{{ o.created_at }}</td>
-            <td class="text-end">
-              <a class="btn btn-sm btn-outline-primary" href="{% url 'ui:purchases_order_detail' o.id %}">
-                Ver
+<div class="card mt-3">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm align-middle mb-0">
+        <thead>
+          <tr class="text-nowrap">
+            <th>
+              <a class="text-primary text-decoration-none" href="{{ sort_url.id }}">
+                ID {% if sort_arrow.id %}<span class="ms-1">{{ sort_arrow.id }}</span>{% endif %}
               </a>
-            </td>
+            </th>
+            <th>
+              <a class="text-primary text-decoration-none" href="{{ sort_url.supplier }}">
+                Proveedor {% if sort_arrow.supplier %}<span class="ms-1">{{ sort_arrow.supplier }}</span>{% endif %}
+              </a>
+            </th>
+            <th>
+              <a class="text-primary text-decoration-none" href="{{ sort_url.status }}">
+                Estado {% if sort_arrow.status %}<span class="ms-1">{{ sort_arrow.status }}</span>{% endif %}
+              </a>
+            </th>
+            <th>
+              <a class="text-primary text-decoration-none" href="{{ sort_url.created }}">
+                Creada {% if sort_arrow.created %}<span class="ms-1">{{ sort_arrow.created }}</span>{% endif %}
+              </a>
+            </th>
+            <th>
+              <a class="text-primary text-decoration-none" href="{{ sort_url.created_by }}">
+                Creada por {% if sort_arrow.created_by %}<span class="ms-1">{{ sort_arrow.created_by }}</span>{% endif %}
+              </a>
+            </th>
+            <th>
+              <a class="text-primary text-decoration-none" href="{{ sort_url.lastmod }}">
+                Últ. modif. {% if sort_arrow.lastmod %}<span class="ms-1">{{ sort_arrow.lastmod }}</span>{% endif %}
+              </a>
+            </th>
+            <th class="text-end">
+              <span class="text-primary">Acciones</span>
+            </th>
           </tr>
-        {% empty %}
-          <tr>
-            <td colspan="6" class="text-muted">Sin resultados.</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+            <tr>
+              <td>{{ r.po.id }}</td>
+              <td>{{ r.po.supplier.name }}</td>
+              <td>{{ r.po.status }}</td>
+              <td>{{ r.po.created_at|date:"d/m/Y g:i a" }}</td>
+              <td>{{ r.created_by_display }}</td>
+              <td>
+                {% if r.last_modified_at %}
+                  {{ r.last_modified_at|date:"d/m/Y g:i a" }}
+                {% else %}
+                  -
+                {% endif %}
+              </td>
+              <td class="text-end">
+                <a class="btn btn-outline-primary btn-sm" href="{% url 'ui:purchases_order_detail' r.po.id %}">Ver</a>
+              </td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="7" class="text-center text-muted py-4">No hay órdenes para mostrar.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 {% endblock %}

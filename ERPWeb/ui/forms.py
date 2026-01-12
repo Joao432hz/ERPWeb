@@ -30,31 +30,55 @@ class PurchaseOrderCreateForm(forms.Form):
 class PurchaseOrderLineForm(forms.Form):
     product_query = forms.CharField(label="Producto", required=False)
     product_id = forms.IntegerField(required=False, widget=forms.HiddenInput())
-    quantity = forms.IntegerField(label="Cantidad", min_value=1)
 
-    # ✅ lo dejamos solo como “storage” invisible (por si querés debug),
-    # pero NO se muestra como recuadro en la UI.
+    # ✅ IMPORTANTE:
+    # - required=False para permitir filas vacías sin que el formset explote
+    # - validamos cantidad SOLO si hay product_id
+    quantity = forms.IntegerField(label="Cantidad", required=False, min_value=1)
+
+    # storage invisible (debug)
     unit_cost_display = forms.CharField(required=False, widget=forms.HiddenInput())
 
-    def clean_product_id(self):
-        pid = self.cleaned_data.get("product_id")
-        if not pid:
+    def clean(self):
+        cleaned = super().clean()
+
+        pid = cleaned.get("product_id")
+        qty = cleaned.get("quantity")
+
+        # Si el usuario escribió algo pero no seleccionó desde sugerencias
+        # (en general product_id vacío) => error SOLO si intentó cargar la fila.
+        # Heurística: si hay texto en product_query o qty cargada.
+        pq = (cleaned.get("product_query") or "").strip()
+        user_touched_row = bool(pq) or (qty is not None)
+
+        if user_touched_row and not pid:
             raise forms.ValidationError("Seleccioná un producto (desde las sugerencias).")
-        return pid
+
+        # Si hay producto, cantidad es obligatoria y > 0
+        if pid and (qty is None or int(qty) <= 0):
+            raise forms.ValidationError("Ingresá una cantidad válida (>= 1).")
+
+        return cleaned
 
 
 class _BaseLineFormSet(BaseFormSet):
     def clean(self):
         super().clean()
         valid_rows = 0
+
         for f in self.forms:
             if not hasattr(f, "cleaned_data"):
                 continue
             cd = f.cleaned_data or {}
             if cd.get("DELETE"):
                 continue
-            if cd.get("product_id") and cd.get("quantity"):
+
+            pid = cd.get("product_id")
+            qty = cd.get("quantity")
+
+            if pid and qty:
                 valid_rows += 1
+
         if valid_rows <= 0:
             raise forms.ValidationError("Cargá al menos 1 línea válida.")
 

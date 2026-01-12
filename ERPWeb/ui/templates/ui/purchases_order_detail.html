@@ -56,17 +56,38 @@
     <div class="card">
       <div class="card-body">
         <h3 class="h6 mb-3">Datos</h3>
+
         <div class="small text-muted">Creado por</div>
-        <div class="mb-2">{{ po.created_by }} · {{ po.created_at }}</div>
+        <div class="mb-2">
+          {{ po.created_by }}
+          ·
+          {% if po.created_at %}
+            {{ po.created_at|date:"d/m/Y" }} {{ po.created_at|time:"TIME_FORMAT" }}
+          {% else %}
+            -
+          {% endif %}
+        </div>
 
         <div class="small text-muted">Confirmación</div>
         <div class="mb-2">
-          {% if po.confirmed_at %}{{ po.confirmed_by }} · {{ po.confirmed_at }}{% else %}-{% endif %}
+          {% if po.confirmed_at %}
+            {{ po.confirmed_by }}
+            ·
+            {{ po.confirmed_at|date:"d/m/Y" }} {{ po.confirmed_at|time:"TIME_FORMAT" }}
+          {% else %}
+            -
+          {% endif %}
         </div>
 
         <div class="small text-muted">Recepción</div>
         <div>
-          {% if po.received_at %}{{ po.received_by }} · {{ po.received_at }}{% else %}-{% endif %}
+          {% if po.received_at %}
+            {{ po.received_by }}
+            ·
+            {{ po.received_at|date:"d/m/Y" }} {{ po.received_at|time:"TIME_FORMAT" }}
+          {% else %}
+            -
+          {% endif %}
         </div>
       </div>
     </div>
@@ -108,7 +129,7 @@
               <td>{{ it.line.product.sku }}</td>
               <td>{{ it.line.product.name }}</td>
               <td class="text-end">{{ it.line.quantity }}</td>
-              <td class="text-end">{{ it.line.unit_cost }}</td>
+              <td class="text-end">${{ it.line.unit_cost|floatformat:2 }}</td>
               <td class="text-end">${{ it.line_total_str }}</td>
             </tr>
           {% empty %}
@@ -118,11 +139,7 @@
       </table>
     </div>
 
-    <div class="d-flex justify-content-end mt-3">
-      <div class="badge text-bg-light border p-3">
-        Total OC: <strong>${{ po_total_str }}</strong>
-      </div>
-    </div>
+    {# ✅ Eliminado el cuadro gris duplicado del total OC (ya se ve arriba) #}
   </div>
 </div>
 {% endblock %}
