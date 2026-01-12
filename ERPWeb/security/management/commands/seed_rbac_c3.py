@@ -23,6 +23,7 @@ ALL_PERMISSIONS = sorted({
     "sales.order.edit",
     "sales.order.confirm",
     "sales.order.cancel",
+
     # purchases
     "purchases.supplier.view",
     "purchases.order.view",
@@ -30,11 +31,19 @@ ALL_PERMISSIONS = sorted({
     "purchases.order.edit",
     "purchases.order.confirm",
     "purchases.order.receive",
+
+    # legacy (compatibilidad; no se usa en matriz nueva)
     "purchases.order.cancel",
+
+    # ✅ alcance cancelación
+    "purchases.order.cancel_any",
+    "purchases.order.cancel_own",
+
     # stock
     "stock.product.view",
     "stock.movement.view",
     "stock.movement.create",
+
     # finance
     "finance.movement.view",
     "finance.movement.pay",
@@ -46,6 +55,7 @@ ALL_PERMISSIONS = sorted({
 # ----------------------------
 ROLE_MATRIX = {
     "Admin": ["*"],
+
     "Supervisor": [
         # sales
         "sales.order.view",
@@ -53,6 +63,7 @@ ROLE_MATRIX = {
         "sales.order.edit",
         "sales.order.confirm",
         "sales.order.cancel",
+
         # purchases
         "purchases.supplier.view",
         "purchases.order.view",
@@ -60,15 +71,20 @@ ROLE_MATRIX = {
         "purchases.order.edit",
         "purchases.order.confirm",
         "purchases.order.receive",
-        "purchases.order.cancel",
+
+        # ✅ Supervisor cancela SOLO propias
+        "purchases.order.cancel_own",
+
         # stock
         "stock.product.view",
         "stock.movement.view",
         "stock.movement.create",
+
         # finance
         "finance.movement.view",
         "finance.movement.pay",
     ],
+
     "Ventas": [
         "sales.order.view",
         "sales.order.create",
@@ -77,15 +93,22 @@ ROLE_MATRIX = {
         "sales.order.cancel",
         "stock.product.view",
     ],
+
     "Compras": [
         "purchases.supplier.view",
         "purchases.order.view",
         "purchases.order.create",
         "purchases.order.edit",
-        "purchases.order.confirm",
-        "purchases.order.cancel",
+
+        # ✅ Compras NO confirma
+        # "purchases.order.confirm",
+
+        # ✅ Compras cancela SOLO propias
+        "purchases.order.cancel_own",
+
         "stock.product.view",
     ],
+
     "Deposito": [
         "stock.product.view",
         "stock.movement.view",
@@ -93,6 +116,7 @@ ROLE_MATRIX = {
         "purchases.order.receive",
         # Nota: stock.movement.create NO por defecto
     ],
+
     "Finanzas": [
         "finance.movement.view",
         "finance.movement.pay",

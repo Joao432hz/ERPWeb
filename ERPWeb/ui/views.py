@@ -32,6 +32,14 @@ def _base_context(user):
     perm_keys = _user_perm_keys(user)
     is_super = bool(getattr(user, "is_superuser", False))
 
+    # ⚠️ Back-compat seguro:
+    # Si por algún motivo quedara asignado el permiso legacy purchases.order.cancel,
+    # lo tratamos como "own" (NO como any) para no sobre-permitir.
+    has_cancel_legacy = (is_super or "purchases.order.cancel" in perm_keys)
+
+    can_cancel_any = (is_super or "purchases.order.cancel_any" in perm_keys)
+    can_cancel_own = (is_super or "purchases.order.cancel_own" in perm_keys or has_cancel_legacy)
+
     return {
         "perm_keys": perm_keys,
 
@@ -47,7 +55,10 @@ def _base_context(user):
         "can_purchases_create": (is_super or "purchases.order.create" in perm_keys),
         "can_purchases_confirm": (is_super or "purchases.order.confirm" in perm_keys),
         "can_purchases_receive": (is_super or "purchases.order.receive" in perm_keys),
-        "can_purchases_cancel": (is_super or "purchases.order.cancel" in perm_keys),
+
+        # Cancelación por alcance
+        "can_purchases_cancel_any": can_cancel_any,
+        "can_purchases_cancel_own": can_cancel_own,
     }
 
 
@@ -200,13 +211,11 @@ def purchases_orders(request):
 
     q = (request.GET.get("q") or "").strip()
 
-    # ✅ Sorting params (whitelist)
     sort = (request.GET.get("sort") or "id").strip()
     direction = (request.GET.get("dir") or "desc").strip().lower()
     if direction not in ("asc", "desc"):
         direction = "desc"
 
-    # Base queryset + annotation para "Últ. modif."
     qs = (
         PurchaseOrder.objects
         .select_related("supplier", "created_by")
@@ -223,7 +232,6 @@ def purchases_orders(request):
         .all()
     )
 
-    # Search
     if q:
         filters = Q()
 
@@ -248,19 +256,18 @@ def purchases_orders(request):
 
         qs = qs.filter(filters)
 
-    # ✅ Mapeo de sorting permitido → order_by
     sort_map = {
         "id": "id",
         "supplier": "supplier__name",
         "status": "status",
         "created": "created_at",
-        "created_by": "created_by__username",  # ✅ NUEVO
+        "created_by": "created_by__username",
         "lastmod": "last_modified_dt",
     }
 
     sort_key = sort_map.get(sort, "id")
     prefix = "" if direction == "asc" else "-"
-    qs = qs.order_by(f"{prefix}{sort_key}", "-id")  # tie-breaker estable
+    qs = qs.order_by(f"{prefix}{sort_key}", "-id")
 
     orders = list(qs[:200])
 
@@ -274,7 +281,6 @@ def purchases_orders(request):
             }
         )
 
-    # ✅ URLs de sort para headers (preserva q)
     def _sort_url(col: str) -> str:
         next_dir = "asc"
         if sort == col:
@@ -298,7 +304,7 @@ def purchases_orders(request):
                 "supplier": _sort_url("supplier"),
                 "status": _sort_url("status"),
                 "created": _sort_url("created"),
-                "created_by": _sort_url("created_by"),  # ✅ NUEVO
+                "created_by": _sort_url("created_by"),
                 "lastmod": _sort_url("lastmod"),
             },
             "sort_arrow": {
@@ -306,7 +312,7 @@ def purchases_orders(request):
                 "supplier": _arrow("supplier"),
                 "status": _arrow("status"),
                 "created": _arrow("created"),
-                "created_by": _arrow("created_by"),  # ✅ NUEVO
+                "created_by": _arrow("created_by"),
                 "lastmod": _arrow("lastmod"),
             },
         }
@@ -347,6 +353,17 @@ def purchases_order_detail(request, pk: int):
 
     po_total = po_total.quantize(Decimal("0.01"))
 
+    status = getattr(po, "status", "") or ""
+    cancelable_status = (status not in ("RECEIVED", "CANCELLED"))
+
+    can_cancel_po = False
+    if cancelable_status:
+        # 🔒 Con la nueva regla: solo cancel_own (any solo aplicaría a superuser o si existe permiso)
+        if context.get("can_purchases_cancel_any"):
+            can_cancel_po = True
+        elif context.get("can_purchases_cancel_own"):
+            can_cancel_po = (getattr(po, "created_by_id", None) == getattr(request.user, "id", None))
+
     context.update(
         {
             "po": po,
@@ -354,6 +371,7 @@ def purchases_order_detail(request, pk: int):
             "line_items": line_items,
             "po_total": po_total,
             "po_total_str": _money_str(po_total),
+            "can_cancel_po": can_cancel_po,
         }
     )
     return render(request, "ui/purchases_order_detail.html", context)
@@ -400,13 +418,25 @@ def purchases_order_receive(request, pk: int):
 @require_POST
 @login_required
 def purchases_order_cancel(request, pk: int):
-    if not _has_perm(request, "purchases.order.cancel"):
-        return _forbidden(request, required_permission="purchases.order.cancel")
+    """
+    Regla vendible:
+    - purchases.order.cancel_any => puede cancelar cualquiera
+    - purchases.order.cancel_own => solo si created_by == user
+    """
+    context = _base_context(request.user)
+
+    if not (context.get("can_purchases_cancel_any") or context.get("can_purchases_cancel_own")):
+        return _forbidden(request, required_permission="purchases.order.cancel_own")
 
     from purchases.models import PurchaseOrder
 
     with transaction.atomic():
         po = get_object_or_404(PurchaseOrder.objects.select_for_update(), pk=pk)
+
+        if not context.get("can_purchases_cancel_any"):
+            if getattr(po, "created_by_id", None) != getattr(request.user, "id", None):
+                return _forbidden(request, required_permission="purchases.order.cancel_own")
+
         try:
             po.cancel(request.user)
             messages.success(request, f"PO#{po.id} cancelada correctamente.")
@@ -534,6 +564,7 @@ def purchases_order_create(request):
                         created_by=request.user,
                     )
 
+                    # FK real (sin asumir nombre)
                     fk_name = _po_line_fk_name(PurchaseOrderLine, PurchaseOrder)
 
                     for ln in prepared_lines:

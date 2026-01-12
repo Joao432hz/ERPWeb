@@ -30,7 +30,7 @@
       </form>
     {% endif %}
 
-    {% if po.status != "RECEIVED" and po.status != "CANCELLED" and can_purchases_cancel %}
+    {% if can_cancel_po %}
       <form method="post" action="{% url 'ui:purchases_order_cancel' po.id %}">
         {% csrf_token %}
         <button class="btn btn-outline-danger">Cancelar</button>
@@ -138,8 +138,6 @@
         </tbody>
       </table>
     </div>
-
-    {# ✅ Eliminado el cuadro gris duplicado del total OC (ya se ve arriba) #}
   </div>
 </div>
 {% endblock %}
