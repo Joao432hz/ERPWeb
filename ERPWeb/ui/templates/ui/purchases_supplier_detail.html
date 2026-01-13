@@ -1,0 +1,75 @@
+{% extends "ui/base.html" %}
+
+{% block title %}Compras · Proveedor #{{ supplier.id }} | ERPWeb{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-start justify-content-between gap-3 flex-wrap">
+  <div>
+    <h2 class="h4 mb-1">Compras · Proveedor #{{ supplier.id }}</h2>
+    <div class="text-muted">
+      <strong>{{ supplier.name }}</strong>
+      {% if supplier.trade_name %} · {{ supplier.trade_name }}{% endif %}
+      · Estado: <strong>{{ supplier.status }}</strong>
+    </div>
+  </div>
+
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary" href="{% url 'ui:purchases_suppliers' %}">Volver</a>
+    {% if can_edit_supplier %}
+      <a class="btn btn-primary" href="{% url 'ui:purchases_supplier_edit' supplier.id %}">Actualizar</a>
+    {% endif %}
+  </div>
+</div>
+
+<hr class="my-4">
+
+<div class="row g-3">
+  {% for sec in sections %}
+    <div class="col-12 col-lg-6">
+      <div class="card">
+        <div class="card-body">
+          <h3 class="h6 mb-3">{{ sec.title }}</h3>
+
+          {% for it in sec.items %}
+            <div class="small text-muted">{{ it.label }}</div>
+            <div class="mb-2">{{ it.value }}</div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+</div>
+
+<div class="card mt-3">
+  <div class="card-body">
+    <h3 class="h6 mb-3">Documentos anexos</h3>
+    <ul class="mb-0">
+      {% for d in supplier.documents.all %}
+        <li>
+          {{ d.original_name|default:"Documento" }}
+          · <span class="text-muted small">{{ d.created_at|date:"d/m/Y g:i a" }}</span>
+        </li>
+      {% empty %}
+        <span class="text-muted">Sin documentos.</span>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+
+<div class="card mt-3">
+  <div class="card-body">
+    <h3 class="h6 mb-3">Campos adicionales</h3>
+
+    {% if extra_fields_items %}
+      <ul class="mb-0">
+        {% for it in extra_fields_items %}
+          <li><strong>{{ it.label }}:</strong> {{ it.value }}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="text-muted">Sin campos adicionales.</div>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}

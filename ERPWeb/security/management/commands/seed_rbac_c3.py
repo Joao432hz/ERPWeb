@@ -24,8 +24,12 @@ ALL_PERMISSIONS = sorted({
     "sales.order.confirm",
     "sales.order.cancel",
 
-    # purchases
+    # purchases - suppliers
     "purchases.supplier.view",
+    "purchases.supplier.create",
+    "purchases.supplier.edit",
+
+    # purchases - orders
     "purchases.order.view",
     "purchases.order.create",
     "purchases.order.edit",
@@ -64,8 +68,12 @@ ROLE_MATRIX = {
         "sales.order.confirm",
         "sales.order.cancel",
 
-        # purchases
+        # purchases - suppliers
         "purchases.supplier.view",
+        "purchases.supplier.create",
+        "purchases.supplier.edit",
+
+        # purchases - orders
         "purchases.order.view",
         "purchases.order.create",
         "purchases.order.edit",
@@ -95,7 +103,12 @@ ROLE_MATRIX = {
     ],
 
     "Compras": [
+        # suppliers
         "purchases.supplier.view",
+        "purchases.supplier.create",
+        "purchases.supplier.edit",
+
+        # orders
         "purchases.order.view",
         "purchases.order.create",
         "purchases.order.edit",
@@ -143,9 +156,6 @@ def _prefix_password(username: str) -> str:
     return f"{prefix}123"
 
 
-# ----------------------------
-# Helpers idempotentes
-# ----------------------------
 def ensure_permission(code: str) -> Permission:
     obj, _ = Permission.objects.get_or_create(
         code=code,
@@ -172,11 +182,6 @@ class SyncResult:
 
 
 def set_role_permissions(role: Role, codes: list[str], *, sync: bool = False) -> SyncResult:
-    """
-    Asigna permisos a un rol.
-    - Idempotente.
-    - Si sync=True, remueve los RolePermission que no estén en la lista objetivo.
-    """
     if "*" in codes:
         codes = ALL_PERMISSIONS
 
@@ -230,12 +235,6 @@ def assign_user_role(username: str, role: Role, *, force_password: bool = False)
 
 
 def cleanup_deposito_role(self_stdout_write):
-    """
-    Cleanup vendible:
-    - Si existen ambos roles: "Depósito" (tilde) y "Deposito" (sin tilde),
-      mueve UserRole del viejo al nuevo, borra los viejos y desactiva "Depósito".
-    - Idempotente (si ya está limpio, no hace nada).
-    """
     role_old = Role.objects.filter(name="Depósito").first()
     role_new = Role.objects.filter(name="Deposito").first()
 
@@ -268,21 +267,9 @@ class Command(BaseCommand):
     help = "Seed RBAC C3: roles + permissions matrix (idempotente) + demo users."
 
     def add_arguments(self, parser):
-        parser.add_argument(
-            "--assign-users",
-            action="store_true",
-            help="Crea/asigna usuarios demo a roles (idempotente).",
-        )
-        parser.add_argument(
-            "--sync",
-            action="store_true",
-            help="Sincroniza permisos por rol: remueve RolePermission sobrantes (vendible).",
-        )
-        parser.add_argument(
-            "--force-demo-passwords",
-            action="store_true",
-            help="Fuerza password de usuarios demo a <prefijo>123 aunque ya existan. Recomendado.",
-        )
+        parser.add_argument("--assign-users", action="store_true")
+        parser.add_argument("--sync", action="store_true")
+        parser.add_argument("--force-demo-passwords", action="store_true")
 
     @transaction.atomic
     def handle(self, *args, **opts):
@@ -290,20 +277,16 @@ class Command(BaseCommand):
         assign_users = bool(opts["assign_users"])
         force_pw = bool(opts["force_demo_passwords"])
 
-        # 0) Cleanup automático: Depósito -> Deposito
         cleanup_deposito_role(lambda msg: self.stdout.write(self.style.WARNING(msg)))
 
-        # 1) Asegurar todos los permisos del sistema
         created_perms = 0
         for code in ALL_PERMISSIONS:
             _, created = Permission.objects.get_or_create(code=code, defaults={"description": code})
             if created:
                 created_perms += 1
 
-        # 2) Crear roles + asignar permisos por matriz
         created_links_total = 0
         removed_links_total = 0
-
         roles_by_name: dict[str, Role] = {}
 
         for role_name, perm_codes in ROLE_MATRIX.items():
@@ -320,7 +303,6 @@ class Command(BaseCommand):
             f"Asignaciones removidas por sync: {removed_links_total}."
         ))
 
-        # 3) Usuarios demo opcionales
         if assign_users:
             for username, role_name in DEMO_USERS:
                 role = roles_by_name.get(role_name) or Role.objects.get(name=role_name)

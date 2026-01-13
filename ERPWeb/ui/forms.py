@@ -1,6 +1,8 @@
 from django import forms
 from django.forms import BaseFormSet, formset_factory
 
+from purchases.models import Supplier
+
 
 class PurchaseOrderCreateForm(forms.Form):
     supplier = forms.ChoiceField(label="Proveedor", choices=())
@@ -31,12 +33,7 @@ class PurchaseOrderLineForm(forms.Form):
     product_query = forms.CharField(label="Producto", required=False)
     product_id = forms.IntegerField(required=False, widget=forms.HiddenInput())
 
-    # ✅ IMPORTANTE:
-    # - required=False para permitir filas vacías sin que el formset explote
-    # - validamos cantidad SOLO si hay product_id
     quantity = forms.IntegerField(label="Cantidad", required=False, min_value=1)
-
-    # storage invisible (debug)
     unit_cost_display = forms.CharField(required=False, widget=forms.HiddenInput())
 
     def clean(self):
@@ -45,16 +42,12 @@ class PurchaseOrderLineForm(forms.Form):
         pid = cleaned.get("product_id")
         qty = cleaned.get("quantity")
 
-        # Si el usuario escribió algo pero no seleccionó desde sugerencias
-        # (en general product_id vacío) => error SOLO si intentó cargar la fila.
-        # Heurística: si hay texto en product_query o qty cargada.
         pq = (cleaned.get("product_query") or "").strip()
         user_touched_row = bool(pq) or (qty is not None)
 
         if user_touched_row and not pid:
             raise forms.ValidationError("Seleccioná un producto (desde las sugerencias).")
 
-        # Si hay producto, cantidad es obligatoria y > 0
         if pid and (qty is None or int(qty) <= 0):
             raise forms.ValidationError("Ingresá una cantidad válida (>= 1).")
 
@@ -89,3 +82,118 @@ PurchaseOrderLineFormSet = formset_factory(
     extra=1,
     can_delete=True,
 )
+
+
+# ============================================================
+# ✅ SUPPLIER CREATE / EDIT
+# ============================================================
+
+PAYMENT_TERMS_CHOICES = [
+    ("CONTADO", "Contado"),
+    ("ANTICIPO", "Con anticipo"),
+    ("30", "30 días"),
+    ("60", "60 días"),
+    ("90", "90 días"),
+]
+
+
+class MultiFileInput(forms.ClearableFileInput):
+    # ✅ Habilita múltiples archivos en Django sin tirar ValueError
+    allow_multiple_selected = True
+
+
+class SupplierCreateForm(forms.ModelForm):
+    payment_terms = forms.MultipleChoiceField(
+        label="Condiciones de pago",
+        choices=PAYMENT_TERMS_CHOICES,
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+    )
+    standard_payment_terms = forms.MultipleChoiceField(
+        label="Plazo de pago estándar",
+        choices=PAYMENT_TERMS_CHOICES,
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+    )
+
+    documents = forms.FileField(
+        label="Documentos anexos",
+        required=False,
+        widget=MultiFileInput(attrs={"multiple": True, "accept": ".pdf,.doc,.docx,.jpg,.jpeg,.bmp,.png"}),
+    )
+
+    extra_fields_text = forms.CharField(
+        label="Campos adicionales (JSON key/value)",
+        required=False,
+        widget=forms.Textarea(attrs={"rows": 3, "placeholder": '{"Ejemplo": "Valor", "Otro": "123"}'}),
+    )
+
+    class Meta:
+        model = Supplier
+        fields = [
+            "name",
+            "trade_name",
+            "supplier_type",
+            "vat_condition",
+            "tax_id",
+            "document_type",
+
+            "fiscal_address",
+            "province",
+            "postal_code",
+            "country",
+
+            "phone",
+            "phone_secondary",
+            "email",
+            "email_ap",
+            "contact_name",
+            "contact_role",
+            "fax_or_web",
+
+            "payment_terms",
+            "standard_payment_terms",
+            "price_list_update_days",
+            "transaction_currency",
+            "account_reference",
+            "classification",
+            "product_category",
+
+            "bank_name",
+            "bank_account_ref",
+            "bank_account_type",
+            "bank_account_holder",
+            "bank_account_currency",
+
+            "tax_condition",
+            "retention_category",
+            "retention_codes",
+
+            "status",
+            "internal_notes",
+        ]
+
+        widgets = {
+            "internal_notes": forms.Textarea(attrs={"rows": 3}),
+            "fiscal_address": forms.TextInput(attrs={"placeholder": "Calle, número, piso, ciudad"}),
+        }
+
+    def clean_extra_fields_text(self):
+        import json
+        raw = (self.cleaned_data.get("extra_fields_text") or "").strip()
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+        except Exception:
+            raise forms.ValidationError('JSON inválido. Ej: {"Clave": "Valor"}')
+        if not isinstance(data, dict):
+            raise forms.ValidationError("Debe ser un JSON objeto (key/value).")
+        return data
+
+    def save(self, commit=True):
+        obj: Supplier = super().save(commit=False)
+        obj.extra_fields = self.cleaned_data.get("extra_fields_text") or {}
+        if commit:
+            obj.save()
+        return obj

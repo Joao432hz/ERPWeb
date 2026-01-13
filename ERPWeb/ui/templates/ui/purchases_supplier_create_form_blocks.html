@@ -1,0 +1,9 @@
+  <div class="d-flex gap-2">
+    {% if mode == "edit" %}
+      <button class="btn btn-primary">Actualizar proveedor</button>
+      <a class="btn btn-outline-secondary" href="{% url 'ui:purchases_supplier_detail' supplier.id %}">Cancelar</a>
+    {% else %}
+      <button class="btn btn-success">Guardar proveedor</button>
+      <a class="btn btn-outline-secondary" href="{% url 'ui:purchases_suppliers' %}">Cancelar</a>
+    {% endif %}
+  </div>

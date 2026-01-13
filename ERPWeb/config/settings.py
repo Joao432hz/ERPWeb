@@ -98,7 +98,6 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "security.context_processors.perm_keys",
-
             ],
         },
     },
@@ -182,6 +181,10 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = "static/"
 
+# ✅ Media (uploads): Documentos anexos proveedores (dev)
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
 # Default primary key field type
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -190,4 +193,3 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # ✅ Ahora el login lleva al Dashboard UI (root "/")
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/accounts/login/"
-

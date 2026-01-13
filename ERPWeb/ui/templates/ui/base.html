@@ -16,10 +16,9 @@
     .nav-link.active { background:#0d6efd; color:#fff; }
     .section-title { font-size:.7rem; text-transform:uppercase; color:#6c757d; padding:.75rem 1rem .25rem; }
 
-    /* Toast container */
     .toast-container-fixed {
       position: fixed;
-      top: 72px; /* debajo de navbar */
+      top: 72px;
       right: 16px;
       z-index: 1080;
       max-width: 420px;
@@ -39,12 +38,10 @@
   </div>
 </nav>
 
-<!-- ✅ Toasts globales -->
 {% if messages %}
   <div class="toast-container-fixed">
     {% for message in messages %}
 
-      {# Header por defecto #}
       {% if "error" in message.tags %}
         {% with header_class="text-bg-danger" icon="bi-exclamation-triangle-fill" %}
           <div class="toast align-items-center mb-2" role="alert" aria-live="assertive" aria-atomic="true"
@@ -137,9 +134,16 @@
 
     {% if can_purchases %}
       <div class="section-title">Compras</div>
+
       <a class="nav-link {% if 'purchases/orders' in request.path %}active{% endif %}" href="{% url 'ui:purchases_orders' %}">
         <i class="bi bi-receipt"></i> Órdenes
       </a>
+
+      {% if can_purchases_suppliers %}
+        <a class="nav-link {% if 'purchases/suppliers' in request.path %}active{% endif %}" href="{% url 'ui:purchases_suppliers' %}">
+          <i class="bi bi-building"></i> Proveedores
+        </a>
+      {% endif %}
     {% endif %}
 
     {% if can_sales %}
@@ -175,3 +179,4 @@
 
 </body>
 </html>
+

@@ -1,31 +1,36 @@
 from django.urls import path
-from . import views
+
+from ui import views
 
 app_name = "ui"
 
 urlpatterns = [
-    # Dashboard UI (root)
     path("", views.dashboard, name="dashboard"),
     path("forbidden/", views.forbidden, name="forbidden"),
 
-    # ✅ UI bajo /ui/ para NO pisar endpoints API (/stock, /purchases, /sales, /finance)
     # Stock
-    path("ui/stock/products/", views.stock_products, name="stock_products"),
-    path("ui/stock/movements/", views.stock_movements, name="stock_movements"),
+    path("stock/products/", views.stock_products, name="stock_products"),
+    path("stock/movements/", views.stock_movements, name="stock_movements"),
 
-    # Compras / Ventas / Finanzas (UI mínimo)
-    path("ui/purchases/orders/", views.purchases_orders, name="purchases_orders"),
-    path("ui/purchases/orders/new/", views.purchases_order_create, name="purchases_order_create"),
-    path("ui/sales/orders/", views.sales_orders, name="sales_orders"),
-    path("ui/finance/movements/", views.finance_movements, name="finance_movements"),
+    # Compras - Órdenes
+    path("purchases/orders/", views.purchases_orders, name="purchases_orders"),
+    path("purchases/orders/new/", views.purchases_order_create, name="purchases_order_create"),
+    path("purchases/orders/<int:pk>/", views.purchases_order_detail, name="purchases_order_detail"),
+    path("purchases/orders/<int:pk>/confirm/", views.purchases_order_confirm, name="purchases_order_confirm"),
+    path("purchases/orders/<int:pk>/receive/", views.purchases_order_receive, name="purchases_order_receive"),
+    path("purchases/orders/<int:pk>/cancel/", views.purchases_order_cancel, name="purchases_order_cancel"),
 
-    # ✅ Compras: detalle + acciones (UI)
-    path("ui/purchases/orders/<int:pk>/", views.purchases_order_detail, name="purchases_order_detail"),
-    path("ui/purchases/orders/<int:pk>/confirm/", views.purchases_order_confirm, name="purchases_order_confirm"),
-    path("ui/purchases/orders/<int:pk>/receive/", views.purchases_order_receive, name="purchases_order_receive"),
-    path("ui/purchases/orders/<int:pk>/cancel/", views.purchases_order_cancel, name="purchases_order_cancel"),
+    # Compras - Proveedores
+    path("purchases/suppliers/", views.purchases_suppliers, name="purchases_suppliers"),
+    path("purchases/suppliers/new/", views.purchases_supplier_create, name="purchases_supplier_create"),
+    path("purchases/suppliers/<int:pk>/", views.purchases_supplier_detail, name="purchases_supplier_detail"),
+    path("purchases/suppliers/<int:pk>/edit/", views.purchases_supplier_edit, name="purchases_supplier_edit"),
 
-    # ✅ API UI: products autocomplete + detail
-    path("ui/api/products/search/", views.products_search, name="products_search"),
-    path("ui/api/products/<int:pk>/", views.product_detail, name="product_detail"),
+    # UI API - Autocomplete productos
+    path("api/products/search/", views.products_search, name="products_search"),
+    path("api/products/<int:pk>/", views.product_detail, name="product_detail"),
+
+    # Ventas / Finanzas placeholders
+    path("sales/orders/", views.sales_orders, name="sales_orders"),
+    path("finance/movements/", views.finance_movements, name="finance_movements"),
 ]

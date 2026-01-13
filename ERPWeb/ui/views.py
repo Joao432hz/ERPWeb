@@ -4,6 +4,7 @@ from urllib.parse import urlencode
 
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q, Case, When, F
 from django.db.models.functions import Coalesce
@@ -32,9 +33,6 @@ def _base_context(user):
     perm_keys = _user_perm_keys(user)
     is_super = bool(getattr(user, "is_superuser", False))
 
-    # ⚠️ Back-compat seguro:
-    # Si por algún motivo quedara asignado el permiso legacy purchases.order.cancel,
-    # lo tratamos como "own" (NO como any) para no sobre-permitir.
     has_cancel_legacy = (is_super or "purchases.order.cancel" in perm_keys)
 
     can_cancel_any = (is_super or "purchases.order.cancel_any" in perm_keys)
@@ -50,6 +48,11 @@ def _base_context(user):
         "can_purchases": (is_super or "purchases.order.view" in perm_keys),
         "can_sales": (is_super or "sales.order.view" in perm_keys),
         "can_finance": (is_super or "finance.movement.view" in perm_keys),
+
+        # ✅ Proveedores
+        "can_purchases_suppliers": (is_super or "purchases.supplier.view" in perm_keys),
+        "can_purchases_suppliers_create": (is_super or "purchases.supplier.create" in perm_keys),
+        "can_purchases_suppliers_edit": (is_super or "purchases.supplier.edit" in perm_keys),
 
         # Compras actions (para botones)
         "can_purchases_create": (is_super or "purchases.order.create" in perm_keys),
@@ -102,10 +105,6 @@ def _product_purchase_cost(product: Product) -> Decimal:
 
 
 def _po_line_fk_name(PurchaseOrderLine, PurchaseOrder) -> str:
-    """
-    Detecta el nombre real del ForeignKey desde PurchaseOrderLine -> PurchaseOrder.
-    Evita asumir 'order' / 'purchase_order' etc.
-    """
     for f in PurchaseOrderLine._meta.fields:
         rel = getattr(f, "remote_field", None)
         if rel and getattr(rel, "model", None) == PurchaseOrder:
@@ -114,14 +113,6 @@ def _po_line_fk_name(PurchaseOrderLine, PurchaseOrder) -> str:
 
 
 def _parse_date_query(q: str):
-    """
-    Intenta interpretar el input del buscador como fecha.
-    Acepta:
-      -YYYY-MM-DD
-      DD/MM/YYYY
-      DD-MM-YYYY
-    Devuelve date o None.
-    """
     if not q:
         return None
 
@@ -136,14 +127,6 @@ def _parse_date_query(q: str):
 
 
 def _po_last_modification_dt(po):
-    """
-    “Última modificación” operativa para el listado (sin tocar models):
-
-    - Si tuvo recepción -> received_at
-    - Si tuvo confirmación -> confirmed_at
-    - Si está CANCELLED -> updated_at
-    - Si sigue en DRAFT sin cambios -> None (mostrar "-")
-    """
     received_at = getattr(po, "received_at", None)
     if received_at:
         return received_at
@@ -157,6 +140,17 @@ def _po_last_modification_dt(po):
         return getattr(po, "updated_at", None)
 
     return None
+
+
+def _display_value(v):
+    if v is None:
+        return ""
+    if isinstance(v, (list, tuple)):
+        return ", ".join([str(x) for x in v if str(x).strip() != ""])
+    if isinstance(v, dict):
+        import json
+        return json.dumps(v, ensure_ascii=False)
+    return str(v).strip()
 
 
 @login_required
@@ -196,6 +190,308 @@ def stock_movements(request):
     context.update({"movements": qs})
     return render(request, "ui/stock_movements.html", context)
 
+
+# ============================================================
+# ✅ UI: Proveedores
+# ============================================================
+
+@login_required
+def purchases_suppliers(request):
+    context = _base_context(request.user)
+    if not _has_perm(request, "purchases.supplier.view"):
+        return _forbidden(request, required_permission="purchases.supplier.view")
+
+    from purchases.models import Supplier
+
+    q = (request.GET.get("q") or "").strip()
+
+    sort = (request.GET.get("sort") or "id").strip()
+    direction = (request.GET.get("dir") or "desc").strip().lower()
+    if direction not in ("asc", "desc"):
+        direction = "desc"
+
+    qs = Supplier.objects.select_related("created_by").all()
+
+    if q:
+        filters = Q()
+        if q.isdigit():
+            try:
+                filters |= Q(id=int(q))
+            except Exception:
+                pass
+        filters |= Q(name__icontains=q)
+        filters |= Q(trade_name__icontains=q)
+        filters |= Q(tax_id__icontains=q)
+        filters |= Q(email__icontains=q)
+        filters |= Q(phone__icontains=q)
+        filters |= Q(status__icontains=q)
+        filters |= Q(created_by__username__icontains=q)
+        qs = qs.filter(filters)
+
+    sort_map = {
+        "id": "id",
+        "name": "name",
+        "status": "status",
+        "tax_id": "tax_id",
+        "created": "created_at",
+        "created_by": "created_by__username",
+    }
+    sort_key = sort_map.get(sort, "id")
+    prefix = "" if direction == "asc" else "-"
+    qs = qs.order_by(f"{prefix}{sort_key}", "-id")
+
+    suppliers = list(qs[:200])
+
+    def _sort_url(col: str) -> str:
+        next_dir = "asc"
+        if sort == col:
+            next_dir = "desc" if direction == "asc" else "asc"
+        params = {"q": q, "sort": col, "dir": next_dir}
+        return "?" + urlencode({k: v for k, v in params.items() if v is not None})
+
+    def _arrow(col: str) -> str:
+        if sort != col:
+            return ""
+        return "▲" if direction == "asc" else "▼"
+
+    context.update(
+        {
+            "suppliers": suppliers,
+            "q": q,
+            "sort": sort,
+            "dir": direction,
+            "sort_url": {
+                "id": _sort_url("id"),
+                "name": _sort_url("name"),
+                "status": _sort_url("status"),
+                "tax_id": _sort_url("tax_id"),
+                "created": _sort_url("created"),
+                "created_by": _sort_url("created_by"),
+            },
+            "sort_arrow": {
+                "id": _arrow("id"),
+                "name": _arrow("name"),
+                "status": _arrow("status"),
+                "tax_id": _arrow("tax_id"),
+                "created": _arrow("created"),
+                "created_by": _arrow("created_by"),
+            },
+        }
+    )
+    return render(request, "ui/purchases_suppliers.html", context)
+
+
+@login_required
+def purchases_supplier_detail(request, pk: int):
+    context = _base_context(request.user)
+    if not _has_perm(request, "purchases.supplier.view"):
+        return _forbidden(request, required_permission="purchases.supplier.view")
+
+    from purchases.models import Supplier
+
+    supplier = get_object_or_404(
+        Supplier.objects.select_related("created_by").prefetch_related("documents"),
+        pk=pk,
+    )
+
+    # ✅ Mostrar TODOS los campos (vacíos como "-")
+    field_labels = {
+        "name": "Razón social",
+        "trade_name": "Nombre comercial",
+        "supplier_type": "Tipo de proveedor",
+        "status": "Estado",
+        "vat_condition": "Condición IVA",
+        "tax_id": "CUIT/Tax ID",
+        "document_type": "Tipo de documento",
+
+        "fiscal_address": "Dirección fiscal",
+        "province": "Provincia/Estado",
+        "postal_code": "Código postal",
+        "country": "País",
+
+        "phone": "Teléfono principal",
+        "phone_secondary": "Teléfono secundario",
+        "email": "Email principal",
+        "email_ap": "Email AP",
+        "contact_name": "Contacto (nombre)",
+        "contact_role": "Contacto (cargo)",
+        "fax_or_web": "Fax/Web",
+
+        "payment_terms": "Condiciones de pago",
+        "standard_payment_terms": "Plazo de pago estándar",
+        "price_list_update_days": "Actualización lista (días)",
+        "transaction_currency": "Moneda transacción",
+        "account_reference": "Cuenta referencia",
+        "classification": "Clasificación/sector",
+        "product_category": "Categoría productos",
+
+        "bank_name": "Banco",
+        "bank_account_ref": "CBU/IBAN",
+        "bank_account_type": "Tipo de cuenta",
+        "bank_account_holder": "Titular",
+        "bank_account_currency": "Moneda cuenta",
+
+        "tax_condition": "Condición tributaria",
+        "retention_category": "Categoría retención",
+        "retention_codes": "Códigos retención",
+
+        "internal_notes": "Notas internas",
+    }
+
+    def pick_all(fields):
+        out = []
+        for f in fields:
+            raw = getattr(supplier, f, None)
+            val = _display_value(raw)
+            out.append(
+                {
+                    "label": field_labels.get(f, f),
+                    "value": val if val else "-",
+                }
+            )
+        return out
+
+    sections = [
+        {"title": "Datos generales", "items": pick_all(["tax_id", "vat_condition", "supplier_type", "document_type", "status"])},
+        {"title": "Contacto", "items": pick_all(["email", "email_ap", "phone", "phone_secondary", "fax_or_web", "contact_name", "contact_role"])},
+        {"title": "Dirección fiscal", "items": pick_all(["fiscal_address", "province", "postal_code", "country"])},
+        {"title": "Condiciones comerciales", "items": pick_all([
+            "payment_terms", "standard_payment_terms", "price_list_update_days", "transaction_currency",
+            "account_reference", "classification", "product_category",
+        ])},
+        {"title": "Datos bancarios", "items": pick_all(["bank_name", "bank_account_ref", "bank_account_type", "bank_account_holder", "bank_account_currency"])},
+        {"title": "Gestión tributaria", "items": pick_all(["tax_condition", "retention_category", "retention_codes"])},
+        {"title": "Notas internas", "items": pick_all(["internal_notes"])},
+    ]
+
+    extra_fields = getattr(supplier, "extra_fields", None) or {}
+    extra_fields_items = []
+    if isinstance(extra_fields, dict):
+        for k, v in extra_fields.items():
+            vv = _display_value(v)
+            extra_fields_items.append({"label": str(k), "value": vv if vv else "-"})
+
+    context.update(
+        {
+            "supplier": supplier,
+            "sections": sections,
+            "extra_fields_items": extra_fields_items,
+            "can_edit_supplier": bool(context.get("can_purchases_suppliers_edit")),
+        }
+    )
+    return render(request, "ui/purchases_supplier_detail.html", context)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def purchases_supplier_create(request):
+    if not _has_perm(request, "purchases.supplier.create"):
+        return _forbidden(request, required_permission="purchases.supplier.create")
+
+    context = _base_context(request.user)
+
+    from purchases.models import Supplier, SupplierDocument
+    from ui.forms import SupplierCreateForm
+
+    form = SupplierCreateForm(request.POST or None, request.FILES or None)
+
+    if request.method == "POST":
+        if form.is_valid():
+            try:
+                with transaction.atomic():
+                    supplier: Supplier = form.save(commit=False)
+                    supplier.created_by = request.user
+                    supplier.full_clean()
+                    supplier.save()
+
+                    for f in request.FILES.getlist("documents"):
+                        SupplierDocument.objects.create(
+                            supplier=supplier,
+                            file=f,
+                            original_name=getattr(f, "name", "") or "",
+                            uploaded_by=request.user,
+                        )
+
+                messages.success(request, f"Proveedor creado: #{supplier.id} - {supplier.name}")
+                return redirect("ui:purchases_supplier_detail", pk=supplier.id)
+
+            except ValidationError as ve:
+                if hasattr(ve, "message_dict"):
+                    for field, errs in ve.message_dict.items():
+                        for e in errs:
+                            messages.error(request, f"{field}: {e}")
+                else:
+                    for e in ve.messages:
+                        messages.error(request, e)
+            except Exception as e:
+                messages.error(request, f"No se pudo crear el proveedor: {e}")
+        else:
+            messages.error(request, "Revisá los errores del formulario.")
+
+    context.update({"form": form, "mode": "create"})
+    return render(request, "ui/purchases_supplier_create.html", context)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def purchases_supplier_edit(request, pk: int):
+    if not _has_perm(request, "purchases.supplier.edit"):
+        return _forbidden(request, required_permission="purchases.supplier.edit")
+
+    context = _base_context(request.user)
+
+    from purchases.models import Supplier, SupplierDocument
+    from ui.forms import SupplierCreateForm
+
+    supplier = get_object_or_404(Supplier, pk=pk)
+
+    import json
+    initial = {}
+    if isinstance(getattr(supplier, "extra_fields", None), dict) and supplier.extra_fields:
+        initial["extra_fields_text"] = json.dumps(supplier.extra_fields, ensure_ascii=False)
+
+    form = SupplierCreateForm(request.POST or None, request.FILES or None, instance=supplier, initial=initial)
+
+    if request.method == "POST":
+        if form.is_valid():
+            try:
+                with transaction.atomic():
+                    sup = form.save(commit=False)
+                    sup.full_clean()
+                    sup.save()
+
+                    # MVP: documentos anexos se AGREGAN (no borramos existentes)
+                    for f in request.FILES.getlist("documents"):
+                        SupplierDocument.objects.create(
+                            supplier=sup,
+                            file=f,
+                            original_name=getattr(f, "name", "") or "",
+                            uploaded_by=request.user,
+                        )
+
+                messages.success(request, f"Proveedor actualizado: #{supplier.id} - {supplier.name}")
+                return redirect("ui:purchases_supplier_detail", pk=supplier.id)
+
+            except ValidationError as ve:
+                if hasattr(ve, "message_dict"):
+                    for field, errs in ve.message_dict.items():
+                        for e in errs:
+                            messages.error(request, f"{field}: {e}")
+                else:
+                    for e in ve.messages:
+                        messages.error(request, e)
+            except Exception as e:
+                messages.error(request, f"No se pudo actualizar el proveedor: {e}")
+        else:
+            messages.error(request, "Revisá los errores del formulario.")
+
+    context.update({"form": form, "supplier": supplier, "mode": "edit"})
+    return render(request, "ui/purchases_supplier_edit.html", context)
+
+
+# ============================================================
+# Compras: Órdenes (tu código intacto)
+# ============================================================
 
 @login_required
 def purchases_orders(request):
@@ -358,7 +654,6 @@ def purchases_order_detail(request, pk: int):
 
     can_cancel_po = False
     if cancelable_status:
-        # 🔒 Con la nueva regla: solo cancel_own (any solo aplicaría a superuser o si existe permiso)
         if context.get("can_purchases_cancel_any"):
             can_cancel_po = True
         elif context.get("can_purchases_cancel_own"):
@@ -418,11 +713,6 @@ def purchases_order_receive(request, pk: int):
 @require_POST
 @login_required
 def purchases_order_cancel(request, pk: int):
-    """
-    Regla vendible:
-    - purchases.order.cancel_any => puede cancelar cualquiera
-    - purchases.order.cancel_own => solo si created_by == user
-    """
     context = _base_context(request.user)
 
     if not (context.get("can_purchases_cancel_any") or context.get("can_purchases_cancel_own")):
@@ -445,10 +735,6 @@ def purchases_order_cancel(request, pk: int):
 
     return redirect("ui:purchases_order_detail", pk=pk)
 
-
-# ===============================
-# ✅ API UI: Autocomplete Products
-# ===============================
 
 @login_required
 @require_http_methods(["GET"])
@@ -499,10 +785,6 @@ def product_detail(request, pk: int):
         }
     )
 
-
-# ===============================
-# ✅ UI: Crear OC (Nueva OC)
-# ===============================
 
 @login_required
 @require_http_methods(["GET", "POST"])
@@ -564,7 +846,6 @@ def purchases_order_create(request):
                         created_by=request.user,
                     )
 
-                    # FK real (sin asumir nombre)
                     fk_name = _po_line_fk_name(PurchaseOrderLine, PurchaseOrder)
 
                     for ln in prepared_lines:
@@ -593,8 +874,6 @@ def purchases_order_create(request):
     )
     return render(request, "ui/purchases_order_create.html", context)
 
-
-# ======= Mantengo placeholders existentes (Ventas/Finanzas) =======
 
 @login_required
 def sales_orders(request):

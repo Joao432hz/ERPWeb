@@ -1,0 +1,94 @@
+{% extends "ui/base.html" %}
+
+{% block title %}Compras · Proveedores | ERPWeb{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-start justify-content-between gap-3 flex-wrap">
+  <div>
+    <h2 class="h4 mb-1">Compras · Proveedores</h2>
+    <p class="text-muted mb-0">Listado (MVP). Incluye activos, inactivos y bloqueados.</p>
+  </div>
+  <div>
+    {% if can_purchases_suppliers_create %}
+      <a class="btn btn-success" href="{% url 'ui:purchases_supplier_create' %}">+ Alta de proveedor</a>
+    {% endif %}
+  </div>
+</div>
+
+<form class="mt-3" method="get">
+  <div class="input-group">
+    <input
+      type="text"
+      name="q"
+      class="form-control"
+      placeholder="Buscar por ID, Razón social, Nombre comercial, CUIT, Email, Estado..."
+      value="{{ q }}"
+    />
+    <input type="hidden" name="sort" value="{{ sort }}">
+    <input type="hidden" name="dir" value="{{ dir }}">
+    <button class="btn btn-primary" type="submit">Buscar</button>
+    <a class="btn btn-outline-secondary" href="{% url 'ui:purchases_suppliers' %}">Limpiar</a>
+  </div>
+</form>
+
+<div class="card mt-3">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm align-middle mb-0">
+        <thead>
+          <tr class="text-nowrap">
+            <th>
+              <a class="text-primary text-decoration-none" href="{{ sort_url.id }}">
+                ID {% if sort_arrow.id %}<span class="ms-1">{{ sort_arrow.id }}</span>{% endif %}
+              </a>
+            </th>
+            <th>
+              <a class="text-primary text-decoration-none" href="{{ sort_url.name }}">
+                Razón social {% if sort_arrow.name %}<span class="ms-1">{{ sort_arrow.name }}</span>{% endif %}
+              </a>
+            </th>
+            <th>Nombre comercial</th>
+            <th>
+              <a class="text-primary text-decoration-none" href="{{ sort_url.tax_id }}">
+                CUIT/Tax ID {% if sort_arrow.tax_id %}<span class="ms-1">{{ sort_arrow.tax_id }}</span>{% endif %}
+              </a>
+            </th>
+            <th>
+              <a class="text-primary text-decoration-none" href="{{ sort_url.status }}">
+                Estado {% if sort_arrow.status %}<span class="ms-1">{{ sort_arrow.status }}</span>{% endif %}
+              </a>
+            </th>
+            <th>
+              <a class="text-primary text-decoration-none" href="{{ sort_url.created }}">
+                Alta {% if sort_arrow.created %}<span class="ms-1">{{ sort_arrow.created }}</span>{% endif %}
+              </a>
+            </th>
+            <th class="text-end">
+              <span class="text-primary">Acciones</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in suppliers %}
+            <tr>
+              <td>{{ s.id }}</td>
+              <td>{{ s.name }}</td>
+              <td>{{ s.trade_name|default:"-" }}</td>
+              <td>{{ s.tax_id|default:"-" }}</td>
+              <td>{{ s.status }}</td>
+              <td>{{ s.created_at|date:"d/m/Y g:i a" }}</td>
+              <td class="text-end">
+                <a class="btn btn-outline-primary btn-sm" href="{% url 'ui:purchases_supplier_detail' s.id %}">Ver</a>
+              </td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="7" class="text-center text-muted py-4">No hay proveedores para mostrar.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
