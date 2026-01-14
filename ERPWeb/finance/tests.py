@@ -1,3 +1,4 @@
+# ERPWeb/finance/tests.py
 from __future__ import annotations
 
 import json
@@ -263,18 +264,18 @@ class FinancialViewsTests(TestCase):
         return resp
 
     def test_movements_list_filters_and_ordering(self):
-        data = self._get_json("/finance/movements/?status=OPEN&ordering=-id")
+        data = self._get_json("/api/finance/movements/?status=OPEN&ordering=-id")
         self.assertEqual(data["status"], "ok")
         self.assertTrue(data["count"] >= 2)
         for item in data["results"]:
             self.assertEqual(item["status"], "OPEN")
 
         # invalid ordering => 400
-        resp = self.client.get("/finance/movements/?ordering=DROP_TABLE")
+        resp = self.client.get("/api/finance/movements/?ordering=DROP_TABLE")
         self.assertEqual(resp.status_code, 400)
 
     def test_summary_contains_void_bucket(self):
-        data = self._get_json("/finance/summary/")
+        data = self._get_json("/api/finance/summary/")
         self.assertEqual(data["status"], "ok")
         self.assertIn("payables", data)
         self.assertIn("receivables", data)
@@ -283,7 +284,7 @@ class FinancialViewsTests(TestCase):
         self.assertIn("void", data["receivables"])
 
     def test_pay_endpoint_success(self):
-        resp = self._post_json(f"/finance/movements/{self.fm_open_receivable.id}/pay/")
+        resp = self._post_json(f"/api/finance/movements/{self.fm_open_receivable.id}/pay/")
         self.assertEqual(resp.status_code, 200, resp.content)
 
         payload = json.loads(resp.content.decode("utf-8"))
@@ -296,13 +297,13 @@ class FinancialViewsTests(TestCase):
         self.assertEqual(self.fm_open_receivable.status, FinancialMovement.Status.PAID)
 
     def test_pay_endpoint_rejects_void(self):
-        resp = self._post_json(f"/finance/movements/{self.fm_void.id}/pay/")
+        resp = self._post_json(f"/api/finance/movements/{self.fm_void.id}/pay/")
         self.assertEqual(resp.status_code, 400)
         body = json.loads(resp.content.decode("utf-8"))
         self.assertIn("VOID", body.get("detail", ""))
 
     def test_pay_endpoint_rejects_already_paid(self):
-        resp = self._post_json(f"/finance/movements/{self.fm_paid.id}/pay/")
+        resp = self._post_json(f"/api/finance/movements/{self.fm_paid.id}/pay/")
         self.assertEqual(resp.status_code, 400)
         body = json.loads(resp.content.decode("utf-8"))
         self.assertTrue("PAID" in body.get("detail", "") or "ya está" in body.get("detail", ""))
@@ -315,7 +316,7 @@ class FinancialViewsTests(TestCase):
             amount=Decimal("0.00"),
             status=FinancialMovement.Status.OPEN,
         )
-        resp = self._post_json(f"/finance/movements/{fm.id}/pay/")
+        resp = self._post_json(f"/api/finance/movements/{fm.id}/pay/")
         self.assertEqual(resp.status_code, 400)
         body = json.loads(resp.content.decode("utf-8"))
         self.assertIn("amount", str(body))
@@ -326,12 +327,12 @@ class FinancialViewsTests(TestCase):
         _login_with_perms(self, "no_fin_perm", perm_codes=[])
 
         # movimientos => forbidden (tu middleware/decorator puede devolver 403 o redirigir)
-        resp = self.client.get("/finance/movements/")
+        resp = self.client.get("/api/finance/movements/")
         self.assertIn(resp.status_code, (302, 403))
 
         # pay => forbidden
         resp2 = self.client.post(
-            f"/finance/movements/{self.fm_open_payable.id}/pay/",
+            f"/api/finance/movements/{self.fm_open_payable.id}/pay/",
             data="{}",
             content_type="application/json",
         )
