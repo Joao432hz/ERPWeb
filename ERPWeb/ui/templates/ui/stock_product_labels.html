@@ -1,0 +1,110 @@
+{% extends "ui/base.html" %}
+{% block title %}Etiquetas · {{ p.sku }} | ERPWeb{% endblock %}
+
+{% block content %}
+  <div class="d-flex align-items-center justify-content-between gap-3 flex-wrap mb-3">
+    <div>
+      <h1 class="h4 mb-1">Stock · Etiquetas</h1>
+      <div class="text-muted small">
+        Producto: <strong>{{ p.sku }}</strong> · {{ p.name }}
+      </div>
+    </div>
+
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="{% url 'ui:stock_product_detail' p.id %}">Volver</a>
+      <button class="btn btn-primary" onclick="window.print()">Imprimir</button>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-12 col-lg-7">
+      <div class="card">
+        <div class="card-body">
+          <h2 class="h6 mb-3">Código de barras</h2>
+
+          <div class="border rounded p-3 bg-white">
+            <svg id="barcode"></svg>
+          </div>
+
+          <div class="text-muted small mt-2">
+            Valor: <code>{{ barcode_value|default:"-" }}</code>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-5">
+      <div class="card">
+        <div class="card-body">
+          <h2 class="h6 mb-3">Código QR</h2>
+
+          <div class="border rounded p-3 bg-white d-flex justify-content-center">
+            <div id="qrcode"></div>
+          </div>
+
+          <div class="text-muted small mt-2">
+            URL: <code>{{ product_detail_url }}</code>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    @media print {
+      nav.navbar, aside.sidebar, .btn { display: none !important; }
+      main { padding: 0 !important; }
+      body { background: #fff !important; }
+      .card { border: none !important; }
+    }
+  </style>
+
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+
+  <script>
+    (function() {
+      const barcodeValue = "{{ barcode_value|escapejs }}";
+
+      function isDigits(s) { return /^[0-9]+$/.test(s); }
+
+      if (barcodeValue) {
+        try {
+          let format = "CODE128";
+          if (isDigits(barcodeValue)) {
+            if (barcodeValue.length === 13) format = "EAN13";
+            else if (barcodeValue.length === 12) format = "EAN13";
+            else if (barcodeValue.length === 8) format = "EAN8";
+          }
+
+          JsBarcode("#barcode", barcodeValue, {
+            format: format,
+            displayValue: true,
+
+            // ✅ Prolijo: evita solapamiento y reduce el tamaño del número
+            fontSize: 14,
+            textMargin: 6,
+
+            // Alto “imprimible” (si querés más chico/grande lo ajustamos)
+            height: 70
+          });
+        } catch (e) {
+          console.warn("Barcode render error", e);
+        }
+      }
+
+      const qrValue = "{{ product_detail_url|escapejs }}";
+      if (qrValue) {
+        try {
+          new QRCode(document.getElementById("qrcode"), {
+            text: qrValue,
+            width: 180,
+            height: 180
+          });
+        } catch (e) {
+          console.warn("QR render error", e);
+        }
+      }
+    })();
+  </script>
+{% endblock %}

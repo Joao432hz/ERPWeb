@@ -1,0 +1,188 @@
+{# ERPWeb/ui/templates/ui/stock_product_detail.html #}
+{% extends "ui/base.html" %}
+
+{% block title %}Stock · Producto #{{ p.id }} | ERPWeb{% endblock %}
+
+{% block content %}
+  <div class="d-flex align-items-center justify-content-between gap-3 flex-wrap mb-3">
+    <div>
+      <h1 class="h4 mb-1">Stock · Producto #{{ p.id }}</h1>
+      <div class="text-muted small">
+        <strong>{{ p.sku }}</strong> · {{ p.name }}
+        {% if p.internal_code %} · Código interno: <strong>{{ p.internal_code }}</strong>{% endif %}
+      </div>
+    </div>
+
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="{% url 'ui:stock_products' %}">Volver</a>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-12 col-lg-7">
+      <div class="card">
+        <div class="card-body">
+          <h2 class="h6 mb-3">Información principal</h2>
+
+          <dl class="row mb-0">
+            <dt class="col-sm-4 text-muted">SKU</dt>
+            <dd class="col-sm-8">{{ p.sku|default:"-" }}</dd>
+
+            <dt class="col-sm-4 text-muted">Nombre</dt>
+            <dd class="col-sm-8">{{ p.name|default:"-" }}</dd>
+
+            <dt class="col-sm-4 text-muted">Marca</dt>
+            <dd class="col-sm-8">{{ p.brand|default:"-" }}</dd>
+
+            <dt class="col-sm-4 text-muted">Modelo</dt>
+            <dd class="col-sm-8">{{ p.model|default:"-" }}</dd>
+
+            <dt class="col-sm-4 text-muted">Estado (operativo)</dt>
+            <dd class="col-sm-8">
+              {% if p.is_active %}
+                <span class="badge text-bg-success">Activo</span>
+              {% else %}
+                <span class="badge text-bg-secondary">Inactivo</span>
+              {% endif %}
+              {% if status_label and status_label != "-" %}
+                <span class="text-muted small ms-2">({{ status_label }})</span>
+              {% endif %}
+            </dd>
+
+            <dt class="col-sm-4 text-muted">Stock actual</dt>
+            <dd class="col-sm-8">
+              <strong>{{ stock_value }}</strong>
+            </dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="card mt-3">
+        <div class="card-body">
+          <h2 class="h6 mb-3">Precios e impuestos</h2>
+
+          <dl class="row mb-0">
+            <dt class="col-sm-4 text-muted">Costo de compra</dt>
+            <dd class="col-sm-8">
+              {% if purchase_cost_str %}{{ purchase_cost_str }}{% else %}-{% endif %}
+            </dd>
+
+            <dt class="col-sm-4 text-muted">Precio de venta</dt>
+            <dd class="col-sm-8">
+              {% if sale_price_str %}{{ sale_price_str }}{% else %}-{% endif %}
+            </dd>
+
+            <dt class="col-sm-4 text-muted">Tipo de impuesto</dt>
+            <dd class="col-sm-8">{{ tax_label|default:"-" }}</dd>
+
+            <dt class="col-sm-4 text-muted">Alícuota</dt>
+            <dd class="col-sm-8">
+              {% if tax_rate_str %}{{ tax_rate_str }}{% else %}-{% endif %}
+            </dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="card mt-3">
+        <div class="card-body">
+          <h2 class="h6 mb-3">Clasificación y logística</h2>
+
+          <dl class="row mb-0">
+            <dt class="col-sm-4 text-muted">Unidad de medida</dt>
+            <dd class="col-sm-8">{{ uom_label|default:"-" }}</dd>
+
+            <dt class="col-sm-4 text-muted">Categoría</dt>
+            <dd class="col-sm-8">{{ p.category|default:"-" }}</dd>
+
+            <dt class="col-sm-4 text-muted">Ubicación / Depósito</dt>
+            <dd class="col-sm-8">{{ p.location|default:"-" }}</dd>
+
+            <dt class="col-sm-4 text-muted">Proveedor preferido</dt>
+            <dd class="col-sm-8">{{ p.preferred_supplier|default:"-" }}</dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="card mt-3">
+        <div class="card-body">
+          <h2 class="h6 mb-3">Notas</h2>
+          {% if p.notes %}
+            <div class="border rounded p-2 bg-light">{{ p.notes }}</div>
+          {% else %}
+            <div class="text-muted">-</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-5">
+      <div class="card">
+        <div class="card-body">
+          <h2 class="h6 mb-3">Códigos</h2>
+
+          <div class="mb-3">
+            <div class="text-muted small mb-2">Código de barras (derivado del SKU)</div>
+
+            {% if barcode_value %}
+              <div class="border rounded p-2 bg-white text-center">
+                <img
+                  src="{% url 'ui:stock_product_barcode_png' p.id %}"
+                  alt="Código de barras {{ barcode_value }}"
+                  class="img-fluid"
+                >
+              </div>
+              <div class="text-muted small mt-2">
+                Valor: <code>{{ barcode_value }}</code>
+              </div>
+            {% else %}
+              <div class="border rounded p-2 bg-light text-muted small">
+                No hay SKU válido para generar el código de barras.
+              </div>
+            {% endif %}
+          </div>
+
+          <hr>
+
+          <div>
+            <div class="text-muted small mb-2">Código QR</div>
+            <div class="border rounded p-2 bg-white text-center">
+              <img
+                src="{% url 'ui:stock_product_qr_png' p.id %}"
+                alt="QR del producto"
+                width="180"
+                height="180"
+              >
+            </div>
+            <div class="text-muted small mt-2">
+              URL: <code>{{ product_detail_url }}</code>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mt-3">
+        <div class="card-body">
+          <h2 class="h6 mb-3">Auditoría</h2>
+
+          <dl class="row mb-0">
+            <dt class="col-sm-5 text-muted">Creado</dt>
+            <dd class="col-sm-7">
+              {% if p.created_at %}{{ p.created_at }}{% else %}-{% endif %}
+            </dd>
+
+            <dt class="col-sm-5 text-muted">Actualizado</dt>
+            <dd class="col-sm-7">
+              {% if p.updated_at %}{{ p.updated_at }}{% else %}-{% endif %}
+            </dd>
+          </dl>
+
+          {% if p.description %}
+            <hr>
+            <div class="text-muted small mb-2">Descripción</div>
+            <div class="border rounded p-2 bg-light">{{ p.description }}</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}

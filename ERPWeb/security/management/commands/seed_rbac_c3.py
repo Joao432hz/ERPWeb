@@ -45,6 +45,7 @@ ALL_PERMISSIONS = sorted({
 
     # stock
     "stock.product.view",
+    "stock.product.create",   # ✅ NUEVO: alta de productos por UI
     "stock.movement.view",
     "stock.movement.create",
 
@@ -85,6 +86,7 @@ ROLE_MATRIX = {
 
         # stock
         "stock.product.view",
+        "stock.product.create",   # ✅ NUEVO: Supervisor puede dar de alta productos
         "stock.movement.view",
         "stock.movement.create",
 
@@ -320,3 +322,4 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.WARNING(
                     "Nota: NO se forzaron passwords. Si un demo user ya existía, su password puede ser antiguo."
                 ))
+

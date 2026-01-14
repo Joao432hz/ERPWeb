@@ -1,0 +1,108 @@
+{% extends "ui/base.html" %}
+{% block title %}Nuevo producto | ERPWeb{% endblock %}
+
+{% block content %}
+  <div class="d-flex align-items-start justify-content-between gap-3 flex-wrap mb-3">
+    <div>
+      <h2 class="h4 mb-1">Stock · Nuevo producto</h2>
+      <div class="text-muted small">Cargá los datos base. El stock se administra por movimientos (IN/OUT).</div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="{% url 'ui:stock_products' %}">Volver</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      <form method="post" novalidate>
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+          <div class="alert alert-danger">
+            {{ form.non_field_errors }}
+          </div>
+        {% endif %}
+
+        <div class="row g-3">
+          <div class="col-12 col-md-4">
+            <label class="form-label">SKU</label>
+            {{ form.sku }}
+            {% if form.sku.errors %}<div class="text-danger small">{{ form.sku.errors }}</div>{% endif %}
+            <div class="form-text">Idealmente el mismo número bajo el código de barras del fabricante.</div>
+          </div>
+
+          <div class="col-12 col-md-4">
+            <label class="form-label">Código interno (opcional)</label>
+            {{ form.internal_code }}
+            {% if form.internal_code.errors %}<div class="text-danger small">{{ form.internal_code.errors }}</div>{% endif %}
+          </div>
+
+          <div class="col-12 col-md-4">
+            <label class="form-label">Estado</label>
+            {{ form.status }}
+            {% if form.status.errors %}<div class="text-danger small">{{ form.status.errors }}</div>{% endif %}
+          </div>
+
+          <div class="col-12">
+            <label class="form-label">Nombre</label>
+            {{ form.name }}
+            {% if form.name.errors %}<div class="text-danger small">{{ form.name.errors }}</div>{% endif %}
+          </div>
+
+          <div class="col-12">
+            <label class="form-label">Descripción</label>
+            {{ form.description }}
+            {% if form.description.errors %}<div class="text-danger small">{{ form.description.errors }}</div>{% endif %}
+          </div>
+
+          <div class="col-12 col-md-4">
+            <label class="form-label">Unidad de medida</label>
+            {{ form.unit_of_measure }}
+            {% if form.unit_of_measure.errors %}<div class="text-danger small">{{ form.unit_of_measure.errors }}</div>{% endif %}
+          </div>
+
+          <div class="col-12 col-md-4">
+            <label class="form-label">Costo unitario (compra)</label>
+            {{ form.purchase_cost }}
+            {% if form.purchase_cost.errors %}<div class="text-danger small">{{ form.purchase_cost.errors }}</div>{% endif %}
+          </div>
+
+          <div class="col-12 col-md-4">
+            <label class="form-label">Precio de venta</label>
+            {{ form.sale_price }}
+            {% if form.sale_price.errors %}<div class="text-danger small">{{ form.sale_price.errors }}</div>{% endif %}
+          </div>
+
+          <div class="col-12 col-md-4">
+            <label class="form-label">Impuesto</label>
+            {{ form.tax_type }}
+            {% if form.tax_type.errors %}<div class="text-danger small">{{ form.tax_type.errors }}</div>{% endif %}
+          </div>
+
+          <div class="col-12 col-md-4">
+            <label class="form-label">Valor del impuesto (%)</label>
+            {{ form.tax_rate }}
+            {% if form.tax_rate.errors %}<div class="text-danger small">{{ form.tax_rate.errors }}</div>{% endif %}
+          </div>
+
+          <div class="col-12 col-md-4">
+            <label class="form-label">Categoría</label>
+            {{ form.category }}
+            {% if form.category.errors %}<div class="text-danger small">{{ form.category.errors }}</div>{% endif %}
+          </div>
+
+          <div class="col-12 col-md-6">
+            <label class="form-label">Marca</label>
+            {{ form.brand }}
+            {% if form.brand.errors %}<div class="text-danger small">{{ form.brand.errors }}</div>{% endif %}
+          </div>
+        </div>
+
+        <div class="d-flex gap-2 mt-4">
+          <button class="btn btn-primary" type="submit">Guardar</button>
+          <a class="btn btn-outline-secondary" href="{% url 'ui:stock_products' %}">Cancelar</a>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endblock %}

@@ -5,13 +5,17 @@
   <div class="d-flex align-items-center justify-content-between mb-3">
     <div>
       <h1 class="h4 mb-1">Stock · Productos</h1>
-      <div class="text-muted small">Listado de productos y búsqueda rápida.</div>
+      <div class="text-muted small">Listado de productos, búsqueda rápida y acceso al detalle.</div>
     </div>
+
+    {% if can_stock_products_create %}
+      <a class="btn btn-primary" href="{% url 'ui:stock_product_create' %}">Alta producto</a>
+    {% endif %}
   </div>
 
   <form class="row g-2 mb-3" method="get">
     <div class="col-12 col-md-6 col-lg-4">
-      <input class="form-control" name="q" value="{{ q }}" placeholder="Buscar por nombre o SKU...">
+      <input class="form-control" name="q" value="{{ q }}" placeholder="Buscar por nombre, SKU, código interno o marca...">
     </div>
     <div class="col-12 col-md-auto">
       <button class="btn btn-primary" type="submit">Buscar</button>
@@ -27,19 +31,40 @@
             <tr>
               <th>SKU</th>
               <th>Producto</th>
+              <th>Marca</th>
               <th class="text-end">Stock</th>
+              <th>Estado</th>
+              <th class="text-end">Acciones</th>
             </tr>
           </thead>
           <tbody>
             {% for p in products %}
               <tr>
                 <td class="text-muted">{{ p.sku }}</td>
-                <td>{{ p.name }}</td>
+                <td>
+                  <a href="{% url 'ui:stock_product_detail' p.id %}" class="text-decoration-none">
+                    {{ p.name }}
+                  </a>
+                  {% if p.internal_code %}
+                    <div class="text-muted small">Código interno: {{ p.internal_code }}</div>
+                  {% endif %}
+                </td>
+                <td>{{ p.brand|default:"-" }}</td>
                 <td class="text-end">{{ p.stock }}</td>
+                <td>
+                  {% if p.is_active %}
+                    <span class="badge text-bg-success">Activo</span>
+                  {% else %}
+                    <span class="badge text-bg-secondary">Inactivo</span>
+                  {% endif %}
+                </td>
+                <td class="text-end">
+                  <a class="btn btn-sm btn-outline-secondary" href="{% url 'ui:stock_product_detail' p.id %}">Ver</a>
+                </td>
               </tr>
             {% empty %}
               <tr>
-                <td colspan="3" class="text-center text-muted py-4">Sin resultados</td>
+                <td colspan="6" class="text-center text-muted py-4">Sin resultados</td>
               </tr>
             {% endfor %}
           </tbody>

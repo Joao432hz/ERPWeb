@@ -5,8 +5,22 @@
   <div class="d-flex align-items-center justify-content-between mb-3">
     <div>
       <h1 class="h4 mb-1">Stock · Movimientos</h1>
-      <div class="text-muted small">Últimos 200 movimientos registrados.</div>
+
+      {% if product %}
+        <div class="text-muted small">
+          Producto: <strong>{{ product.sku }}</strong> · {{ product.name }}
+        </div>
+      {% else %}
+        <div class="text-muted small">Últimos 200 movimientos registrados.</div>
+      {% endif %}
     </div>
+
+    {% if product %}
+      <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary" href="{% url 'ui:stock_product_detail' product.id %}">Volver al producto</a>
+        <a class="btn btn-outline-secondary" href="{% url 'ui:stock_movements' %}">Ver todos</a>
+      </div>
+    {% endif %}
   </div>
 
   <div class="card">

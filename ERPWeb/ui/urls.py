@@ -10,7 +10,19 @@ urlpatterns = [
 
     # Stock
     path("stock/products/", views.stock_products, name="stock_products"),
+    path("stock/products/new/", views.stock_product_create, name="stock_product_create"),
+    path("stock/products/<int:pk>/", views.stock_product_detail, name="stock_product_detail"),
     path("stock/movements/", views.stock_movements, name="stock_movements"),
+
+    # ✅ Movimientos por producto
+    path("stock/products/<int:pk>/movements/", views.stock_product_movements, name="stock_product_movements"),
+
+    # ✅ Etiquetas por producto
+    path("stock/products/<int:pk>/labels/", views.stock_product_labels, name="stock_product_labels"),
+
+    # ✅ Imágenes (PNG) para barcode / QR
+    path("stock/products/<int:pk>/barcode.png", views.stock_product_barcode_png, name="stock_product_barcode_png"),
+    path("stock/products/<int:pk>/qr.png", views.stock_product_qr_png, name="stock_product_qr_png"),
 
     # Compras - Órdenes
     path("purchases/orders/", views.purchases_orders, name="purchases_orders"),
@@ -30,7 +42,7 @@ urlpatterns = [
     path("api/products/search/", views.products_search, name="products_search"),
     path("api/products/<int:pk>/", views.product_detail, name="product_detail"),
 
-    # Ventas / Finanzas placeholders
+    # Ventas / Finanzas
     path("sales/orders/", views.sales_orders, name="sales_orders"),
     path("finance/movements/", views.finance_movements, name="finance_movements"),
 ]

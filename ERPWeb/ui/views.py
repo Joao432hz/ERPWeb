@@ -1,6 +1,7 @@
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from urllib.parse import urlencode
+from io import BytesIO
 
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
@@ -9,8 +10,9 @@ from django.db import transaction
 from django.db.models import Q, Case, When, F
 from django.db.models.functions import Coalesce
 from django.shortcuts import render, get_object_or_404, redirect
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.http import require_POST, require_http_methods
+from django.urls import reverse
 
 from security.models import RolePermission
 from stock.models import Product, StockMovement
@@ -43,6 +45,7 @@ def _base_context(user):
 
         # Sidebar gates
         "can_stock_products": (is_super or "stock.product.view" in perm_keys),
+        "can_stock_products_create": (is_super or "stock.product.create" in perm_keys),
         "can_stock_movements": (is_super or "stock.movement.view" in perm_keys),
 
         "can_purchases": (is_super or "purchases.order.view" in perm_keys),
@@ -165,6 +168,10 @@ def forbidden(request):
     return render(request, "ui/forbidden.html", context, status=403)
 
 
+# ============================================================
+# ✅ Stock: Productos (listado + alta + detalle)
+# ============================================================
+
 @login_required
 def stock_products(request):
     context = _base_context(request.user)
@@ -174,10 +181,108 @@ def stock_products(request):
     q = (request.GET.get("q") or "").strip()
     qs = Product.objects.all().order_by("name")
     if q:
-        qs = qs.filter(Q(name__icontains=q) | Q(sku__icontains=q))
+        qs = qs.filter(
+            Q(name__icontains=q)
+            | Q(sku__icontains=q)
+            | Q(internal_code__icontains=q)
+            | Q(brand__icontains=q)
+        )
 
-    context.update({"products": qs, "q": q})
+    context.update({"products": qs[:300], "q": q})
     return render(request, "ui/stock_products.html", context)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def stock_product_create(request):
+    if not _has_perm(request, "stock.product.create"):
+        return _forbidden(request, required_permission="stock.product.create")
+
+    context = _base_context(request.user)
+
+    from ui.product_forms import ProductCreateForm
+
+    form = ProductCreateForm(request.POST or None)
+
+    if request.method == "POST":
+        if form.is_valid():
+            try:
+                with transaction.atomic():
+                    p: Product = form.save(commit=False)
+                    # Stock NO se carga manualmente, siempre inicia en 0
+                    p.stock = 0
+                    p.full_clean()
+                    p.save()
+
+                messages.success(request, f"Producto creado: #{p.id} · {p.sku} - {p.name}")
+                return redirect("ui:stock_product_detail", pk=p.id)
+
+            except ValidationError as ve:
+                if hasattr(ve, "message_dict"):
+                    for field, errs in ve.message_dict.items():
+                        for e in errs:
+                            messages.error(request, f"{field}: {e}")
+                else:
+                    for e in ve.messages:
+                        messages.error(request, e)
+            except Exception as e:
+                messages.error(request, f"No se pudo crear el producto: {e}")
+        else:
+            messages.error(request, "Revisá los errores del formulario.")
+
+    context.update({"form": form})
+    return render(request, "ui/stock_product_create.html", context)
+
+
+@login_required
+def stock_product_detail(request, pk: int):
+    context = _base_context(request.user)
+    if not _has_perm(request, "stock.product.view"):
+        return _forbidden(request, required_permission="stock.product.view")
+
+    p = get_object_or_404(Product, pk=pk)
+
+    uom_label = dict(Product.UOM_CHOICES).get(
+        getattr(p, "unit_of_measure", ""),
+        getattr(p, "unit_of_measure", ""),
+    )
+
+    tax_label = (
+        dict(Product.TAX_CHOICES).get(getattr(p, "tax_type", ""), getattr(p, "tax_type", ""))
+        if hasattr(Product, "TAX_CHOICES")
+        else getattr(p, "tax_type", "")
+    )
+
+    status_label = (
+        dict(Product.STATUS_CHOICES).get(getattr(p, "status", ""), getattr(p, "status", ""))
+        if hasattr(Product, "STATUS_CHOICES")
+        else getattr(p, "status", "")
+    )
+
+    stock_value = getattr(p, "stock", 0)
+
+    barcode_value = (getattr(p, "sku", None) or "").strip()
+
+    product_detail_url = request.build_absolute_uri(
+        reverse("ui:stock_product_detail", kwargs={"pk": p.id})
+    )
+
+    context.update(
+        {
+            "p": p,
+            "uom_label": uom_label or "-",
+            "tax_label": tax_label or "-",
+            "status_label": status_label or "-",
+            "stock_value": stock_value,
+            "purchase_cost_str": _money_str(_as_decimal(getattr(p, "purchase_cost", None)) or Decimal("0.00")),
+            "sale_price_str": _money_str(_as_decimal(getattr(p, "sale_price", None)) or Decimal("0.00")),
+            "tax_rate_str": _money_str(_as_decimal(getattr(p, "tax_rate", None)) or Decimal("0.00")),
+            # ✅ para códigos en template
+            "barcode_value": barcode_value,
+            "product_detail_url": product_detail_url,
+        }
+    )
+    return render(request, "ui/stock_product_detail.html", context)
 
 
 @login_required
@@ -189,6 +294,145 @@ def stock_movements(request):
     qs = StockMovement.objects.select_related("product").order_by("-created_at")[:200]
     context.update({"movements": qs})
     return render(request, "ui/stock_movements.html", context)
+
+
+@login_required
+def stock_product_movements(request, pk: int):
+    context = _base_context(request.user)
+    if not _has_perm(request, "stock.movement.view"):
+        return _forbidden(request, required_permission="stock.movement.view")
+
+    p = get_object_or_404(Product, pk=pk)
+
+    qs = (
+        StockMovement.objects
+        .select_related("product")
+        .filter(product_id=p.id)
+        .order_by("-created_at")[:200]
+    )
+
+    context.update({"movements": qs, "product": p})
+    return render(request, "ui/stock_movements.html", context)
+
+
+@login_required
+def stock_product_labels(request, pk: int):
+    context = _base_context(request.user)
+    if not _has_perm(request, "stock.product.view"):
+        return _forbidden(request, required_permission="stock.product.view")
+
+    p = get_object_or_404(Product, pk=pk)
+
+    product_detail_url = request.build_absolute_uri(
+        reverse("ui:stock_product_detail", kwargs={"pk": p.id})
+    )
+
+    barcode_value = (getattr(p, "sku", None) or "").strip()
+
+    context.update(
+        {
+            "p": p,
+            # compat: tu template usa product_detail_url
+            "product_detail_url": product_detail_url,
+            # compat: por si quedó algo viejo
+            "product_url": product_detail_url,
+            "barcode_value": barcode_value,
+        }
+    )
+    return render(request, "ui/stock_product_labels.html", context)
+
+
+# ✅ NUEVO: Barcode PNG (para mostrar imagen en detalle / impresión)
+# - Si SKU es numérico 13/12 -> EAN13 (estructura como retail)
+# - Si SKU es numérico 8 -> EAN8
+# - Caso contrario -> CODE128
+# - Ajustes: evitar solapamiento + número más chico
+@login_required
+@require_http_methods(["GET"])
+def stock_product_barcode_png(request, pk: int):
+    if not _has_perm(request, "stock.product.view"):
+        return _forbidden(request, required_permission="stock.product.view")
+
+    p = get_object_or_404(Product, pk=pk)
+    value = (getattr(p, "sku", None) or "").strip()
+    if not value:
+        return HttpResponse(status=404)
+
+    def _is_digits(s: str) -> bool:
+        return s.isdigit()
+
+    try:
+        from barcode.writer import ImageWriter
+
+        barcode_cls = None
+        payload = value
+
+        if _is_digits(value):
+            if len(value) == 13:
+                # EAN13 en python-barcode usa 12 dígitos y calcula checksum
+                barcode_cls = "EAN13"
+                payload = value[:12]
+            elif len(value) == 12:
+                barcode_cls = "EAN13"
+                payload = value
+            elif len(value) == 8:
+                barcode_cls = "EAN8"
+                payload = value
+
+        if barcode_cls:
+            from barcode import get_barcode_class
+            BarcodeClass = get_barcode_class(barcode_cls)
+        else:
+            from barcode import Code128 as BarcodeClass
+
+        bio = BytesIO()
+        code = BarcodeClass(payload, writer=ImageWriter())
+
+        code.write(
+            bio,
+            options={
+                # barras
+                "module_width": 0.25 if barcode_cls in ("EAN13", "EAN8") else 0.20,
+                "module_height": 16.0,
+                "quiet_zone": 2.0,
+
+                # texto
+                "write_text": True,
+                "font_size": 8,       # ✅ más chico
+                "text_distance": 4.0, # ✅ más separación (evita solape)
+
+                # calidad
+                "dpi": 300,
+            },
+        )
+
+        return HttpResponse(bio.getvalue(), content_type="image/png")
+    except Exception:
+        return HttpResponse(status=500)
+
+
+# ✅ NUEVO: QR PNG (URL al detalle del producto)
+@login_required
+@require_http_methods(["GET"])
+def stock_product_qr_png(request, pk: int):
+    if not _has_perm(request, "stock.product.view"):
+        return _forbidden(request, required_permission="stock.product.view")
+
+    p = get_object_or_404(Product, pk=pk)
+
+    url = request.build_absolute_uri(
+        reverse("ui:stock_product_detail", kwargs={"pk": p.id})
+    )
+
+    try:
+        import qrcode
+
+        img = qrcode.make(url)
+        bio = BytesIO()
+        img.save(bio, format="PNG")
+        return HttpResponse(bio.getvalue(), content_type="image/png")
+    except Exception:
+        return HttpResponse(status=500)
 
 
 # ============================================================
@@ -294,7 +538,6 @@ def purchases_supplier_detail(request, pk: int):
         pk=pk,
     )
 
-    # ✅ Mostrar TODOS los campos (vacíos como "-")
     field_labels = {
         "name": "Razón social",
         "trade_name": "Nombre comercial",
@@ -303,12 +546,10 @@ def purchases_supplier_detail(request, pk: int):
         "vat_condition": "Condición IVA",
         "tax_id": "CUIT/Tax ID",
         "document_type": "Tipo de documento",
-
         "fiscal_address": "Dirección fiscal",
         "province": "Provincia/Estado",
         "postal_code": "Código postal",
         "country": "País",
-
         "phone": "Teléfono principal",
         "phone_secondary": "Teléfono secundario",
         "email": "Email principal",
@@ -316,7 +557,6 @@ def purchases_supplier_detail(request, pk: int):
         "contact_name": "Contacto (nombre)",
         "contact_role": "Contacto (cargo)",
         "fax_or_web": "Fax/Web",
-
         "payment_terms": "Condiciones de pago",
         "standard_payment_terms": "Plazo de pago estándar",
         "price_list_update_days": "Actualización lista (días)",
@@ -324,17 +564,14 @@ def purchases_supplier_detail(request, pk: int):
         "account_reference": "Cuenta referencia",
         "classification": "Clasificación/sector",
         "product_category": "Categoría productos",
-
         "bank_name": "Banco",
         "bank_account_ref": "CBU/IBAN",
         "bank_account_type": "Tipo de cuenta",
         "bank_account_holder": "Titular",
         "bank_account_currency": "Moneda cuenta",
-
         "tax_condition": "Condición tributaria",
         "retention_category": "Categoría retención",
         "retention_codes": "Códigos retención",
-
         "internal_notes": "Notas internas",
     }
 
@@ -343,12 +580,7 @@ def purchases_supplier_detail(request, pk: int):
         for f in fields:
             raw = getattr(supplier, f, None)
             val = _display_value(raw)
-            out.append(
-                {
-                    "label": field_labels.get(f, f),
-                    "value": val if val else "-",
-                }
-            )
+            out.append({"label": field_labels.get(f, f), "value": val if val else "-"})
         return out
 
     sections = [
@@ -460,7 +692,6 @@ def purchases_supplier_edit(request, pk: int):
                     sup.full_clean()
                     sup.save()
 
-                    # MVP: documentos anexos se AGREGAN (no borramos existentes)
                     for f in request.FILES.getlist("documents"):
                         SupplierDocument.objects.create(
                             supplier=sup,
@@ -915,3 +1146,4 @@ def finance_movements(request):
 
     context.update({"movements": qs[:200], "q": q})
     return render(request, "ui/finance_movements.html", context)
+
