@@ -1,3 +1,4 @@
+# config/settings.py
 """
 Django settings for config project.
 
@@ -32,23 +33,25 @@ def _env(*names, default=None):
     return default
 
 
-# SECURITY WARNING: keep the secret key used in production secret!
-# ✅ Permite override por env sin romper local (si no está, usa el valor actual)
+# -----------------------
+# Security
+# -----------------------
 SECRET_KEY = _env(
     "DJANGO_SECRET_KEY",
     "SECRET_KEY",
     default="django-insecure-ieaiut*)s=m7+10wv^8dbu+5lxnv)hvm_+w!4#j2zlx_1jku6+",
 )
 
-# SECURITY WARNING: don't run with debug turned on in production!
-# ✅ Permite override por env sin romper local (si no está, queda True como hoy)
-DEBUG = str(_env("DJANGO_DEBUG", "DEBUG", default="True")).lower() in ("1", "true", "yes", "y", "on")
+DEBUG = str(_env("DJANGO_DEBUG", "DEBUG", default="True")).lower() in (
+    "1", "true", "yes", "y", "on"
+)
 
-# Dev local: permite acceder por 127.0.0.1 / localhost sin errores
 ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
 
 
+# -----------------------
 # Application definition
+# -----------------------
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -66,7 +69,7 @@ INSTALLED_APPS = [
     "sales",
     "finance",
 
-    # ✅ IMPORTANTE: usar el AppConfig para que corra el seed en ready()
+    # Seed en ready()
     "purchases.apps.PurchasesConfig",
 ]
 
@@ -77,7 +80,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
 
-    # ✅ Restringe /admin/ a superusers
+    # Admin solo superusers
     "config.middleware.AdminSuperuserOnlyMiddleware",
 
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -86,11 +89,15 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = "config.urls"
 
+
+# -----------------------
+# Templates
+# -----------------------
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [BASE_DIR / "templates"],  # ✅ para templates/registration/login.html
-        "APP_DIRS": True,  # ✅ incluye templates dentro de apps (ej: ui/templates/)
+        "DIRS": [BASE_DIR / "templates"],
+        "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
                 "django.template.context_processors.debug",
@@ -136,33 +143,141 @@ db_from_url = _db_from_database_url(DATABASE_URL) if DATABASE_URL else None
 if db_from_url:
     DATABASES = {"default": db_from_url}
 else:
-    DB_NAME = _env("DB_NAME", "POSTGRES_DB", "PGDATABASE", default="erpweb")
-    DB_USER = _env("DB_USER", "POSTGRES_USER", "PGUSER", default="erpuser")
-    DB_PASSWORD = _env(
-        "DB_PASSWORD",
-        "DB_PASS",
-        "POSTGRES_PASSWORD",
-        "PGPASSWORD",
-        default="erpweb123",  # fallback local: tu pass actual
-    )
-    # IMPORTANTÍSIMO: 127.0.0.1 evita que en CI intente ::1
-    DB_HOST = _env("DB_HOST", "POSTGRES_HOST", "PGHOST", default="127.0.0.1")
-    DB_PORT = _env("DB_PORT", "POSTGRES_PORT", "PGPORT", default="5432")
-
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
-            "NAME": DB_NAME,
-            "USER": DB_USER,
-            "PASSWORD": DB_PASSWORD,
-            "HOST": DB_HOST,
-            "PORT": DB_PORT,
+            "NAME": _env("DB_NAME", "POSTGRES_DB", "PGDATABASE", default="erpweb"),
+            "USER": _env("DB_USER", "POSTGRES_USER", "PGUSER", default="erpuser"),
+            "PASSWORD": _env(
+                "DB_PASSWORD",
+                "DB_PASS",
+                "POSTGRES_PASSWORD",
+                "PGPASSWORD",
+                default="erpweb123",
+            ),
+            "HOST": _env("DB_HOST", "POSTGRES_HOST", "PGHOST", default="127.0.0.1"),
+            "PORT": _env("DB_PORT", "POSTGRES_PORT", "PGPORT", default="5432"),
             "CONN_MAX_AGE": 0,
         }
     }
 
 
+# -----------------------
+# Cache (safe defaults)
+# -----------------------
+CACHE_BACKEND = str(
+    _env("DJANGO_CACHE_BACKEND", "CACHE_BACKEND", default="locmem")
+).lower()
+
+CACHE_TIMEOUT = int(_env("DJANGO_CACHE_TIMEOUT", "CACHE_TIMEOUT", default="3600"))
+CACHE_KEY_PREFIX = _env("DJANGO_CACHE_PREFIX", "CACHE_PREFIX", default="erpweb")
+
+if CACHE_BACKEND == "filebased":
+    cache_dir = _env("DJANGO_CACHE_DIR", "CACHE_DIR", default=str(BASE_DIR / ".cache"))
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+            "LOCATION": cache_dir,
+            "TIMEOUT": CACHE_TIMEOUT,
+            "KEY_PREFIX": CACHE_KEY_PREFIX,
+            "OPTIONS": {"MAX_ENTRIES": 20000},
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "erpweb-default",
+            "TIMEOUT": CACHE_TIMEOUT,
+            "KEY_PREFIX": CACHE_KEY_PREFIX,
+            "OPTIONS": {"MAX_ENTRIES": 20000},
+        }
+    }
+
+
+# -----------------------
+# External APIs (Smart Lookup)
+# -----------------------
+# ⚠️ Estas variables DEBEN existir en settings aunque no haya env vars
+# para evitar errores y permitir degradación controlada.
+
+# SerpAPI (Google engine)
+SERPAPI_KEY = _env("SERPAPI_KEY", "SERPAPI_API_KEY", default=None)
+
+# OpenAI (extractor/normalizador)
+OPENAI_API_KEY = _env("OPENAI_API_KEY", default=None)
+
+# Defaults para Google Search
+SMART_LOOKUP_GL = _env("SMART_LOOKUP_GL", default="ar")  # Argentina
+SMART_LOOKUP_HL = _env("SMART_LOOKUP_HL", default="es")  # Español
+
+# -----------------------
+# ✅ Smart Lookup - Mejoras de calidad (sin romper nada)
+# -----------------------
+# 1) Marcas conocidas: ayuda a detectar "marca" en el extractor heurístico
+#    (se pueden ampliar por cliente/industria sin tocar código)
+SMART_LOOKUP_BRANDS_HINTS = [
+    # Cuidado personal
+    "Algabo",
+    "Dove",
+    "Rexona",
+    "Nivea",
+    "Gillette",
+    "Pantene",
+    "Sedal",
+    "Head & Shoulders",
+
+    # Alimentos / bebidas
+    "Arcor",
+    "Bagley",
+    "Terrabusi",
+    "Nutella",
+    "Ferrero",
+    "Coca-Cola",
+    "Pepsi",
+    "La Serenísima",
+    "Sancor",
+    "Ilolay",
+
+    # Limpieza
+    "Ayudín",
+    "Mr. Músculo",
+    "Cif",
+    "Ala",
+    "Skip",
+    "Drive",
+]
+
+# 2) Dominios confiables: mejora el scoring y reduce ruido
+#    (prioriza retailers/fabricantes reales sobre resultados basura)
+SMART_LOOKUP_TRUSTED_DOMAINS = [
+    # Retail / supermercados
+    "carrefour.com.ar",
+    "coto.com.ar",
+    "jumbo.com.ar",
+    "disco.com.ar",
+    "vea.com.ar",
+    "changomas.com.ar",
+    "diaonline.supermercadosdia.com.ar",
+
+    # Farmacias
+    "farmacity.com",
+    "simply.com.ar",
+
+    # Marketplaces
+    "mercadolibre.com.ar",
+    "mlstatic.com",
+
+    # Fabricantes
+    "algabo.com.ar",
+    "arcor.com",
+    "ferrero.com",
+]
+
+
+# -----------------------
 # Password validation
+# -----------------------
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -171,25 +286,28 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 
+# -----------------------
 # Internationalization
+# -----------------------
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
 
 
-# Static files (CSS, JavaScript, Images)
+# -----------------------
+# Static & Media
+# -----------------------
 STATIC_URL = "static/"
 
-# ✅ Media (uploads): Documentos anexos proveedores (dev)
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
-# Default primary key field type
+
+# -----------------------
+# Auth
+# -----------------------
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-
-# Auth redirects
-# ✅ Ahora el login lleva al Dashboard UI (root "/")
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/accounts/login/"

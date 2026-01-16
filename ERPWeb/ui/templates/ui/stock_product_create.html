@@ -2,107 +2,419 @@
 {% block title %}Nuevo producto | ERPWeb{% endblock %}
 
 {% block content %}
-  <div class="d-flex align-items-start justify-content-between gap-3 flex-wrap mb-3">
-    <div>
-      <h2 class="h4 mb-1">Stock · Nuevo producto</h2>
-      <div class="text-muted small">Cargá los datos base. El stock se administra por movimientos (IN/OUT).</div>
-    </div>
-    <div class="d-flex gap-2">
-      <a class="btn btn-outline-secondary" href="{% url 'ui:stock_products' %}">Volver</a>
-    </div>
+<div class="d-flex align-items-start justify-content-between gap-3 flex-wrap mb-3">
+  <div>
+    <h2 class="h4 mb-1">Stock · Nuevo producto</h2>
+    <div class="text-muted small">Cargá los datos base. El stock se administra por movimientos (IN/OUT).</div>
   </div>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary" href="{% url 'ui:stock_products' %}">Volver</a>
+  </div>
+</div>
 
-  <div class="card">
-    <div class="card-body">
-      <form method="post" novalidate>
-        {% csrf_token %}
+<div class="card">
+  <div class="card-body">
+    <form method="post" novalidate>
+      {% csrf_token %}
 
-        {% if form.non_field_errors %}
-          <div class="alert alert-danger">
-            {{ form.non_field_errors }}
-          </div>
-        {% endif %}
+      <div class="row g-3">
+        <div class="col-12 col-md-4">
+          <label class="form-label">SKU</label>
 
-        <div class="row g-3">
-          <div class="col-12 col-md-4">
-            <label class="form-label">SKU</label>
+          <div class="input-group">
             {{ form.sku }}
-            {% if form.sku.errors %}<div class="text-danger small">{{ form.sku.errors }}</div>{% endif %}
-            <div class="form-text">Idealmente el mismo número bajo el código de barras del fabricante.</div>
+            <button
+              id="smartSkuBtn"
+              class="btn btn-outline-primary"
+              type="button"
+              title="Búsqueda inteligente"
+              aria-label="Búsqueda inteligente"
+            >✨</button>
           </div>
 
-          <div class="col-12 col-md-4">
-            <label class="form-label">Código interno (opcional)</label>
-            {{ form.internal_code }}
-            {% if form.internal_code.errors %}<div class="text-danger small">{{ form.internal_code.errors }}</div>{% endif %}
-          </div>
-
-          <div class="col-12 col-md-4">
-            <label class="form-label">Estado</label>
-            {{ form.status }}
-            {% if form.status.errors %}<div class="text-danger small">{{ form.status.errors }}</div>{% endif %}
-          </div>
-
-          <div class="col-12">
-            <label class="form-label">Nombre</label>
-            {{ form.name }}
-            {% if form.name.errors %}<div class="text-danger small">{{ form.name.errors }}</div>{% endif %}
-          </div>
-
-          <div class="col-12">
-            <label class="form-label">Descripción</label>
-            {{ form.description }}
-            {% if form.description.errors %}<div class="text-danger small">{{ form.description.errors }}</div>{% endif %}
-          </div>
-
-          <div class="col-12 col-md-4">
-            <label class="form-label">Unidad de medida</label>
-            {{ form.unit_of_measure }}
-            {% if form.unit_of_measure.errors %}<div class="text-danger small">{{ form.unit_of_measure.errors }}</div>{% endif %}
-          </div>
-
-          <div class="col-12 col-md-4">
-            <label class="form-label">Costo unitario (compra)</label>
-            {{ form.purchase_cost }}
-            {% if form.purchase_cost.errors %}<div class="text-danger small">{{ form.purchase_cost.errors }}</div>{% endif %}
-          </div>
-
-          <div class="col-12 col-md-4">
-            <label class="form-label">Precio de venta</label>
-            {{ form.sale_price }}
-            {% if form.sale_price.errors %}<div class="text-danger small">{{ form.sale_price.errors }}</div>{% endif %}
-          </div>
-
-          <div class="col-12 col-md-4">
-            <label class="form-label">Impuesto</label>
-            {{ form.tax_type }}
-            {% if form.tax_type.errors %}<div class="text-danger small">{{ form.tax_type.errors }}</div>{% endif %}
-          </div>
-
-          <div class="col-12 col-md-4">
-            <label class="form-label">Valor del impuesto (%)</label>
-            {{ form.tax_rate }}
-            {% if form.tax_rate.errors %}<div class="text-danger small">{{ form.tax_rate.errors }}</div>{% endif %}
-          </div>
-
-          <div class="col-12 col-md-4">
-            <label class="form-label">Categoría</label>
-            {{ form.category }}
-            {% if form.category.errors %}<div class="text-danger small">{{ form.category.errors }}</div>{% endif %}
-          </div>
-
-          <div class="col-12 col-md-6">
-            <label class="form-label">Marca</label>
-            {{ form.brand }}
-            {% if form.brand.errors %}<div class="text-danger small">{{ form.brand.errors }}</div>{% endif %}
+          <div id="smartHint" class="text-muted small mt-1" style="display:none;">
+            Algunos campos fueron sugeridos automáticamente. Revisá antes de guardar.
           </div>
         </div>
 
-        <div class="d-flex gap-2 mt-4">
-          <button class="btn btn-primary" type="submit">Guardar</button>
-          <a class="btn btn-outline-secondary" href="{% url 'ui:stock_products' %}">Cancelar</a>
+        <div class="col-12 col-md-4">
+          <label class="form-label">Código interno</label>
+          {{ form.internal_code }}
         </div>
-      </form>
+
+        <div class="col-12 col-md-4">
+          <label class="form-label">Estado</label>
+          {{ form.status }}
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Nombre</label>
+          {{ form.name }}
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Descripción</label>
+          {{ form.description }}
+        </div>
+
+        <div class="col-12 col-md-4">
+          <label class="form-label">Unidad de medida</label>
+          {{ form.unit_of_measure }}
+        </div>
+
+        <div class="col-12 col-md-4">
+          <label class="form-label">Costo unitario</label>
+          {{ form.purchase_cost }}
+        </div>
+
+        <div class="col-12 col-md-4">
+          <label class="form-label">Precio de venta</label>
+          {{ form.sale_price }}
+        </div>
+
+        <div class="col-12 col-md-4">
+          <label class="form-label">Impuesto</label>
+          {{ form.tax_type }}
+        </div>
+
+        <div class="col-12 col-md-4">
+          <label class="form-label">Valor impuesto (%)</label>
+          {{ form.tax_rate }}
+        </div>
+
+        <div class="col-12 col-md-4">
+          <label class="form-label">Categoría</label>
+          {{ form.category }}
+        </div>
+
+        <div class="col-12 col-md-6">
+          <label class="form-label">Marca</label>
+          {{ form.brand }}
+        </div>
+      </div>
+
+      <div class="d-flex gap-2 mt-4">
+        <button class="btn btn-primary" type="submit">Guardar</button>
+        <a class="btn btn-outline-secondary" href="{% url 'ui:stock_products' %}">Cancelar</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal fade" id="smartLookupModal" tabindex="-1" aria-labelledby="smartLookupModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+
+      <div class="modal-header">
+        <h5 class="modal-title" id="smartLookupModalLabel">Búsqueda inteligente</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+      </div>
+
+      <div class="modal-body">
+
+        <!-- Estado / Spinner -->
+        <div id="smartLookupStatus" class="d-flex align-items-center gap-2">
+          <div class="spinner-border" role="status" aria-hidden="true"></div>
+          <div>Buscando información…</div>
+        </div>
+
+        <!-- Error -->
+        <div id="smartLookupError" class="alert alert-danger mt-3" style="display:none;"></div>
+
+        <!-- Resultado -->
+        <div id="smartLookupResult" class="mt-3" style="display:none;">
+          <div class="alert alert-warning mb-3">
+            <strong>Datos sugeridos</strong> (revisá antes de aplicar). No se inventa información.
+          </div>
+
+          <div class="row g-3">
+            <div class="col-12 col-md-6">
+              <div class="text-muted small">Código / SKU</div>
+              <div id="res_codigo" class="fw-semibold">-</div>
+            </div>
+            <div class="col-12 col-md-6">
+              <div class="text-muted small">Nivel de confianza</div>
+              <div id="res_conf" class="fw-semibold">-</div>
+            </div>
+            <div class="col-12">
+              <div class="text-muted small">Nombre</div>
+              <div id="res_nombre" class="fw-semibold">-</div>
+            </div>
+            <div class="col-12 col-md-6">
+              <div class="text-muted small">Marca</div>
+              <div id="res_marca" class="fw-semibold">-</div>
+            </div>
+            <div class="col-12 col-md-6">
+              <div class="text-muted small">Categoría</div>
+              <div id="res_categoria" class="fw-semibold">-</div>
+            </div>
+            <div class="col-12">
+              <div class="text-muted small">Descripción</div>
+              <div id="res_desc" style="white-space:pre-wrap;">-</div>
+            </div>
+
+            <div class="col-12 col-md-6">
+              <div class="text-muted small">Peso / Volumen</div>
+              <div id="res_peso" class="fw-semibold">-</div>
+            </div>
+
+            <div class="col-12 col-md-6">
+              <div class="text-muted small">Imagen</div>
+              <div class="d-flex align-items-center gap-2">
+                <img id="res_img" alt="Imagen producto" style="max-height:72px; max-width:72px; display:none;" class="rounded border">
+                <a id="res_img_link" href="#" target="_blank" rel="noopener" style="display:none;">Abrir imagen</a>
+                <span id="res_img_none" class="text-muted">-</span>
+              </div>
+            </div>
+
+            <div class="col-12">
+              <div class="text-muted small">Fuente(s)</div>
+              <ul id="res_sources" class="mb-0"></ul>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="modal-footer">
+        <div class="me-auto text-muted small" id="smartLookupFooterNote"></div>
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cerrar</button>
+        <button class="btn btn-primary" id="smartApplyBtn" type="button" disabled>Aplicar al formulario</button>
+      </div>
+
     </div>
   </div>
+</div>
+
+<script>
+window.addEventListener("load", function () {
+  const SMART_LOOKUP_URL = "/api/stock/products/smart-lookup/";
+
+  const skuInput = document.getElementById("id_sku");
+  const btn = document.getElementById("smartSkuBtn");
+  const hint = document.getElementById("smartHint");
+
+  const modalEl = document.getElementById("smartLookupModal");
+  const modal = new bootstrap.Modal(modalEl);
+
+  const statusEl = document.getElementById("smartLookupStatus");
+  const errorEl = document.getElementById("smartLookupError");
+  const resultEl = document.getElementById("smartLookupResult");
+  const applyBtn = document.getElementById("smartApplyBtn");
+  const footerNote = document.getElementById("smartLookupFooterNote");
+
+  let lastNormalized = null;
+
+  function getCookie(name) {
+    const m = document.cookie.match(new RegExp("(^|;\\s*)" + name + "=([^;]+)"));
+    return m ? decodeURIComponent(m[2]) : null;
+  }
+
+  function showProcessing() {
+    statusEl.style.display = "flex";
+    errorEl.style.display = "none";
+    resultEl.style.display = "none";
+    footerNote.textContent = "";
+    applyBtn.disabled = true;
+    lastNormalized = null;
+  }
+
+  function showError(msg) {
+    statusEl.style.display = "none";
+    resultEl.style.display = "none";
+    errorEl.style.display = "block";
+    errorEl.textContent = msg;
+    applyBtn.disabled = true;
+  }
+
+  function setText(id, value) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = (value === null || value === undefined || String(value).trim() === "") ? "-" : String(value);
+  }
+
+  function clearSources() {
+    const ul = document.getElementById("res_sources");
+    ul.innerHTML = "";
+  }
+
+  function addSourceItem(label, url) {
+    const ul = document.getElementById("res_sources");
+    const li = document.createElement("li");
+    if (url) {
+      const a = document.createElement("a");
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = label || url;
+      li.appendChild(a);
+    } else {
+      li.textContent = label || "-";
+    }
+    ul.appendChild(li);
+  }
+
+  function renderResult(payload) {
+    const data = payload && payload.data ? payload.data : null;
+    if (!data) {
+      showError("No se encontraron datos. Podés completar manualmente.");
+      return;
+    }
+
+    lastNormalized = data;
+
+    statusEl.style.display = "none";
+    errorEl.style.display = "none";
+    resultEl.style.display = "block";
+
+    setText("res_codigo", data.codigo_barra || payload.barcode || (skuInput ? skuInput.value : ""));
+    setText("res_nombre", data.nombre);
+    setText("res_marca", data.marca);
+    setText("res_categoria", data.categoria);
+    setText("res_desc", data.descripcion);
+    setText("res_peso", data.peso_volumen);
+
+    const conf = (data.nivel_confianza === null || data.nivel_confianza === undefined)
+      ? "-"
+      : String(data.nivel_confianza);
+    setText("res_conf", conf);
+
+    // Imagen
+    const img = document.getElementById("res_img");
+    const imgLink = document.getElementById("res_img_link");
+    const imgNone = document.getElementById("res_img_none");
+
+    if (data.imagen_url) {
+      img.src = data.imagen_url;
+      img.style.display = "block";
+      imgLink.href = data.imagen_url;
+      imgLink.style.display = "inline";
+      imgNone.style.display = "none";
+    } else {
+      img.style.display = "none";
+      imgLink.style.display = "none";
+      imgNone.style.display = "inline";
+    }
+
+    // Sources
+    clearSources();
+    const sources = payload.sources || [];
+    if (sources.length) {
+      sources.forEach(s => addSourceItem((s.name || s.type || "Fuente"), (s.url || null)));
+    } else {
+      addSourceItem(data.fuente_datos || "Sin fuente detallada", null);
+    }
+
+    const cached = payload.cached ? " (desde cache)" : "";
+    footerNote.textContent = `Resultado listo${cached}.`;
+
+    applyBtn.disabled = false;
+  }
+
+  function markSuggested(el) {
+    if (!el) return;
+    el.classList.add("border-warning", "border-2");
+  }
+
+  function applyToForm(data) {
+    if (!data) return;
+
+    const mapping = [
+      ["nombre", "id_name"],
+      ["marca", "id_brand"],
+      ["categoria", "id_category"],
+      ["descripcion", "id_description"],
+    ];
+
+    let anyApplied = false;
+
+    mapping.forEach(([key, id]) => {
+      const v = data[key];
+      const el = document.getElementById(id);
+      if (!el) return;
+
+      // No pisar si el usuario ya escribió algo
+      const current = (el.value || "").trim();
+      if (current) return;
+
+      if (v !== null && v !== undefined && String(v).trim() !== "") {
+        el.value = String(v);
+        markSuggested(el);
+        anyApplied = true;
+      }
+    });
+
+    if (anyApplied) {
+      hint.style.display = "block";
+    }
+  }
+
+  async function doLookup() {
+    const sku = (skuInput ? skuInput.value : "").trim();
+    if (!sku) {
+      alert("Ingresá un SKU");
+      return;
+    }
+
+    modal.show();
+    showProcessing();
+
+    try {
+      const csrftoken = getCookie("csrftoken") || "";
+
+      const res = await fetch(SMART_LOOKUP_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrftoken
+        },
+        body: JSON.stringify({ barcode: sku })
+      });
+
+      // Siempre intentamos leer JSON, incluso en errores
+      let payload = null;
+      const contentType = (res.headers.get("content-type") || "").toLowerCase();
+      if (contentType.includes("application/json")) {
+        payload = await res.json();
+      } else {
+        const txt = await res.text();
+        payload = { detail: txt };
+      }
+
+      if (!res.ok) {
+        const detail = payload && payload.detail ? payload.detail : ("Error HTTP " + res.status);
+        const errType = payload && payload.error_type ? (" (" + payload.error_type + ")") : "";
+        const statusCode = payload && payload.status_code ? (" · status_code=" + payload.status_code) : "";
+        showError(detail + errType + statusCode);
+        return;
+      }
+
+      // OK
+      renderResult(payload);
+
+    } catch (e) {
+      showError("No se pudo realizar la búsqueda. Detalle: " + (e && e.message ? e.message : e));
+    }
+  }
+
+  btn.addEventListener("click", doLookup);
+
+  applyBtn.addEventListener("click", function () {
+    if (!lastNormalized) return;
+    applyToForm(lastNormalized);
+    modal.hide();
+  });
+
+  // Opcional: Ctrl/Cmd+Enter desde SKU
+  if (skuInput) {
+    skuInput.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
+        ev.preventDefault();
+        doLookup();
+      }
+    });
+  }
+});
+</script>
 {% endblock %}
