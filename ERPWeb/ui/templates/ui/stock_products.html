@@ -13,13 +13,52 @@
     {% endif %}
   </div>
 
-  <form class="row g-2 mb-3" method="get">
-    <div class="col-12 col-md-6 col-lg-4">
-      <input class="form-control" name="q" value="{{ q }}" placeholder="Buscar por nombre, SKU, código interno o marca...">
-    </div>
-    <div class="col-12 col-md-auto">
-      <button class="btn btn-primary" type="submit">Buscar</button>
-      <a class="btn btn-outline-secondary" href="{% url 'ui:stock_products' %}">Limpiar</a>
+  <form class="mb-3" method="get" id="productsFiltersForm">
+    <div class="row g-2 align-items-center">
+      <div class="col-12 col-md-6 col-lg-4">
+        <input class="form-control" name="q" value="{{ q }}" placeholder="Buscar por nombre, SKU, código interno o marca...">
+      </div>
+
+      {# mantener sort/dir al buscar / filtrar #}
+      <input type="hidden" name="sort" value="{{ sort }}">
+      <input type="hidden" name="dir" value="{{ dir }}">
+
+      <div class="col-12 col-md-auto">
+        <button class="btn btn-primary" type="submit">Buscar</button>
+        <a class="btn btn-outline-secondary" href="{% url 'ui:stock_products' %}">Limpiar</a>
+      </div>
+
+      <div class="col-12">
+        <div class="d-flex gap-3 align-items-center mt-1 flex-wrap">
+          <label class="form-check form-check-inline mb-0">
+            <input
+              class="form-check-input"
+              type="checkbox"
+              name="active"
+              value="1"
+              {% if active_checked %}checked{% endif %}
+              onchange="this.form.submit()"
+            >
+            <span class="form-check-label">Activo</span>
+          </label>
+
+          <label class="form-check form-check-inline mb-0">
+            <input
+              class="form-check-input"
+              type="checkbox"
+              name="inactive"
+              value="1"
+              {% if inactive_checked %}checked{% endif %}
+              onchange="this.form.submit()"
+            >
+            <span class="form-check-label">Inactivo</span>
+          </label>
+
+          <div class="text-muted small">
+            Tip: si seleccionás ambos, se muestran todos los productos.
+          </div>
+        </div>
+      </div>
     </div>
   </form>
 
@@ -28,18 +67,57 @@
       <div class="table-responsive">
         <table class="table table-striped mb-0 align-middle">
           <thead class="table-light">
-            <tr>
-              <th>SKU</th>
-              <th>Producto</th>
-              <th>Marca</th>
-              <th class="text-end">Stock</th>
-              <th>Estado</th>
-              <th class="text-end">Acciones</th>
+            <tr class="text-nowrap">
+              <th>
+                <a class="text-primary text-decoration-none" href="{{ sort_url.id }}">
+                  ID {% if sort_arrow.id %}<span class="ms-1">{{ sort_arrow.id }}</span>{% endif %}
+                </a>
+              </th>
+              <th>
+                <a class="text-primary text-decoration-none" href="{{ sort_url.sku }}">
+                  SKU {% if sort_arrow.sku %}<span class="ms-1">{{ sort_arrow.sku }}</span>{% endif %}
+                </a>
+              </th>
+              <th>
+                <a class="text-primary text-decoration-none" href="{{ sort_url.name }}">
+                  Producto {% if sort_arrow.name %}<span class="ms-1">{{ sort_arrow.name }}</span>{% endif %}
+                </a>
+              </th>
+              <th>
+                <a class="text-primary text-decoration-none" href="{{ sort_url.brand }}">
+                  Marca {% if sort_arrow.brand %}<span class="ms-1">{{ sort_arrow.brand }}</span>{% endif %}
+                </a>
+              </th>
+              <th class="text-end">
+                <a class="text-primary text-decoration-none" href="{{ sort_url.stock }}">
+                  Stock {% if sort_arrow.stock %}<span class="ms-1">{{ sort_arrow.stock }}</span>{% endif %}
+                </a>
+              </th>
+              <th>
+                <a class="text-primary text-decoration-none" href="{{ sort_url.status }}">
+                  Estado {% if sort_arrow.status %}<span class="ms-1">{{ sort_arrow.status }}</span>{% endif %}
+                </a>
+              </th>
+              <th>
+                <a class="text-primary text-decoration-none" href="{{ sort_url.created }}">
+                  Creado {% if sort_arrow.created %}<span class="ms-1">{{ sort_arrow.created }}</span>{% endif %}
+                </a>
+              </th>
+              <th>
+                <a class="text-primary text-decoration-none" href="{{ sort_url.updated }}">
+                  Últ. modif. {% if sort_arrow.updated %}<span class="ms-1">{{ sort_arrow.updated }}</span>{% endif %}
+                </a>
+              </th>
+              <th class="text-end">
+                <span class="text-primary">Acciones</span>
+              </th>
             </tr>
           </thead>
+
           <tbody>
             {% for p in products %}
               <tr>
+                <td>{{ p.id }}</td>
                 <td class="text-muted">{{ p.sku }}</td>
                 <td>
                   <a href="{% url 'ui:stock_product_detail' p.id %}" class="text-decoration-none">
@@ -58,16 +136,19 @@
                     <span class="badge text-bg-secondary">Inactivo</span>
                   {% endif %}
                 </td>
+                <td>{{ p.created_at|date:"d/m/Y g:i a" }}</td>
+                <td>{{ p.updated_at|date:"d/m/Y g:i a" }}</td>
                 <td class="text-end">
                   <a class="btn btn-sm btn-outline-secondary" href="{% url 'ui:stock_product_detail' p.id %}">Ver</a>
                 </td>
               </tr>
             {% empty %}
               <tr>
-                <td colspan="6" class="text-center text-muted py-4">Sin resultados</td>
+                <td colspan="9" class="text-center text-muted py-4">Sin resultados</td>
               </tr>
             {% endfor %}
           </tbody>
+
         </table>
       </div>
     </div>

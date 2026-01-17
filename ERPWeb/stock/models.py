@@ -1,8 +1,15 @@
 from decimal import Decimal
+import hashlib
+import mimetypes
+import os
+import re
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
+from django.core.files.base import ContentFile
 from django.db import models, transaction
 from django.db.models import Q, Sum
 from django.utils import timezone
@@ -36,6 +43,22 @@ class Product(models.Model):
     description = models.TextField(
         blank=True,
         help_text="Descripción opcional",
+    )
+
+    # ===============================
+    # ✅ Imagen (archivo) + fuente (URL)
+    # ===============================
+    image = models.ImageField(
+        upload_to="products/",
+        blank=True,
+        null=True,
+        help_text="Imagen del producto (archivo guardado en MEDIA_ROOT).",
+    )
+
+    image_source_url = models.URLField(
+        blank=True,
+        default="",
+        help_text="URL de origen de la imagen (si fue descargada/sugerida).",
     )
 
     # ===============================
@@ -227,6 +250,8 @@ class Product(models.Model):
             self.category = self.category.strip()
         if self.brand:
             self.brand = self.brand.strip()
+        if self.image_source_url:
+            self.image_source_url = self.image_source_url.strip()
 
         # Sync estado → is_active
         if self.status == self.STATUS_ACTIVE:
@@ -243,7 +268,6 @@ class Product(models.Model):
         self.qr_payload = self.build_qr_payload()
 
         # Validación de internal_code: opcional, pero si existe lo queremos “usable”
-        # (no forzamos unique aquí porque lo define la DB / constraint si lo agregamos)
         if self.internal_code and len(self.internal_code) < 2:
             raise ValidationError({"internal_code": "El código interno debe tener al menos 2 caracteres."})
 
@@ -270,14 +294,119 @@ class Product(models.Model):
             "status": self.status,
         }
 
-        # JSON compacto (legible, sin romper caracteres)
         import json
         return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
     def save(self, *args, **kwargs):
-        # clean() también sincroniza barcode_value, qr_payload y status/is_active
         self.full_clean()
         return super().save(*args, **kwargs)
+
+    # ===============================
+    # ✅ Imagen: download + persistencia como archivo
+    # ===============================
+
+    @staticmethod
+    def _safe_slug(s: str) -> str:
+        s = (s or "").strip().lower()
+        s = re.sub(r"[^a-z0-9]+", "-", s)
+        s = re.sub(r"-{2,}", "-", s).strip("-")
+        return s[:40] if s else "product"
+
+    @staticmethod
+    def _guess_ext(content_type: str, path: str) -> str:
+        ct = (content_type or "").split(";")[0].strip().lower()
+
+        ext = None
+        if ct:
+            ext = mimetypes.guess_extension(ct)
+
+        if not ext:
+            _, guessed = os.path.splitext(path or "")
+            ext = guessed
+
+        ext = (ext or "").lower()
+
+        # normalización
+        if ext == ".jpe":
+            ext = ".jpeg"
+        if ext == ".jpeg":
+            ext = ".jpg"
+
+        if ext not in (".jpg", ".png", ".webp", ".gif"):
+            ext = ".jpg"
+        return ext
+
+    def set_image_from_url(
+        self,
+        image_url: str,
+        *,
+        # ✅ Compat: tu ui/views.py llama timeout=8
+        timeout: int | None = None,
+        timeout_seconds: int = 8,
+        max_bytes: int = 5_000_000,
+        user_agent: str = "ERPWeb/1.0 (+smart-lookup)",
+        force: bool = False,
+        # ✅ Compat: tu ui/views.py llama filename_prefix=...
+        filename_prefix: str | None = None,
+    ) -> bool:
+        """
+        Descarga una imagen desde image_url y la guarda en Product.image.
+        - No rompe si falla (devuelve False).
+        - Si ya hay imagen y force=False, no pisa (devuelve False).
+        - Guarda image_source_url siempre que venga una URL válida (aunque falle la descarga).
+
+        Recomendación: llamar con self.pk ya existente.
+        """
+        url = (image_url or "").strip()
+        if not url:
+            return False
+
+        # Guardamos la fuente (aunque falle la descarga)
+        self.image_source_url = url
+
+        if self.image and not force:
+            return False
+
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+
+        # Preferencia: timeout (nuevo) si viene, sino timeout_seconds (legacy)
+        effective_timeout = int(timeout) if timeout is not None else int(timeout_seconds)
+
+        # Armamos request con UA (algunos sitios bloquean default)
+        req = Request(url, headers={"User-Agent": user_agent})
+
+        try:
+            with urlopen(req, timeout=effective_timeout) as resp:
+                content_type = (resp.headers.get("Content-Type") or "").strip()
+                raw = resp.read(max_bytes + 1)
+
+            if not raw:
+                return False
+            if len(raw) > max_bytes:
+                return False
+
+            # Validación soft por content-type: si viene y NO parece imagen, cortamos.
+            ct_main = (content_type.split(";")[0].strip().lower() if content_type else "")
+            if ct_main and not ct_main.startswith("image/"):
+                return False
+
+            ext = self._guess_ext(content_type, parsed.path)
+
+            # Nombre estable: <prefix>_<id>_<hash8>.ext
+            h = hashlib.sha256(url.encode("utf-8")).hexdigest()[:8]
+            pid = self.pk or "tmp"
+            prefix = self._safe_slug(filename_prefix) if filename_prefix else self._safe_slug(self.sku or self.name or "product")
+            filename = f"{prefix}_{pid}_{h}{ext}"
+
+            # Guardar en ImageField
+            self.image.save(filename, ContentFile(raw), save=False)
+            return True
+
+        except Exception:
+            # Fail silent (regla: no romper creación)
+            return False
 
     # ===============================
     # 🔎 MÉTODOS DE AUDITORÍA
@@ -285,10 +414,6 @@ class Product(models.Model):
 
     @property
     def stock_calculated(self):
-        """
-        Stock calculado desde movimientos (solo para auditoría/debug).
-        NO se usa para operar.
-        """
         ins = (
             self.movements.filter(movement_type=StockMovement.IN)
             .aggregate(s=Sum("quantity"))["s"]
@@ -302,10 +427,6 @@ class Product(models.Model):
         return ins - outs
 
     def rebuild_stock_from_movements(self, *, save=True):
-        """
-        Recalcula el stock a partir de movimientos históricos.
-        Útil para mantenimiento o reparación de datos.
-        """
         new_stock = self.stock_calculated
         if new_stock < 0:
             raise ValidationError(
@@ -319,11 +440,9 @@ class Product(models.Model):
 
 
 class StockMovement(models.Model):
-    # Valores persistidos
     IN = "IN"
     OUT = "OUT"
 
-    # Alias de compatibilidad
     TYPE_IN = IN
     TYPE_OUT = OUT
 
@@ -404,13 +523,6 @@ class StockMovement(models.Model):
             raise ValidationError({"product": "El producto está inactivo."})
 
     def save(self, *args, **kwargs):
-        """
-        Reglas ERP:
-        - El stock se impacta SOLO al crear el movimiento
-        - IN suma, OUT resta
-        - No se permite stock negativo
-        - Operación atómica + lock del producto
-        """
         is_new = self.pk is None
         self.full_clean()
 
@@ -442,3 +554,51 @@ class StockMovement(models.Model):
             product.stock = new_stock
             product.updated_at = timezone.now()
             product.save(update_fields=["stock", "updated_at"])
+
+
+# ============================================================
+# ✅ Cache persistente de Smart Lookup (API propia)
+# - Guarda cada búsqueda (FOUND y NOT_FOUND)
+# - Evita consumir cuota SerpAPI repetida
+# ============================================================
+
+class ProductLookupCache(models.Model):
+    KIND_BARCODE = "BARCODE"
+    KIND_CHOICES = (
+        (KIND_BARCODE, "Barcode/SKU"),
+    )
+
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES, default=KIND_BARCODE, db_index=True)
+    query_norm = models.CharField(max_length=64, db_index=True, help_text="Query normalizada (trim; útil para matching).")
+    query_raw = models.CharField(max_length=64, blank=True, default="", help_text="Query original recibida.")
+
+    found = models.BooleanField(default=False, db_index=True, help_text="True si se encontró info útil.")
+    expires_at = models.DateTimeField(null=True, blank=True, db_index=True, help_text="Expiración para NOT_FOUND (anti-spam).")
+
+    # Guardamos el payload completo devuelto por /smart-lookup (sin debug en prod)
+    payload = models.JSONField(default=dict, blank=True)
+
+    hits = models.PositiveIntegerField(default=0, help_text="Cantidad de veces que se reutilizó desde DB.")
+    last_hit_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Cache Smart Lookup"
+        verbose_name_plural = "Cache Smart Lookup"
+        constraints = [
+            models.UniqueConstraint(fields=["kind", "query_norm"], name="uniq_stock_lookup_kind_query"),
+        ]
+        indexes = [
+            models.Index(fields=["kind", "query_norm"], name="idx_stock_lookup_kind_query"),
+            models.Index(fields=["found", "expires_at"], name="idx_stock_lookup_found_exp"),
+        ]
+
+    def __str__(self):
+        return f"{self.kind}:{self.query_norm} (found={self.found})"
+
+    def is_expired(self) -> bool:
+        if not self.expires_at:
+            return False
+        return timezone.now() >= self.expires_at

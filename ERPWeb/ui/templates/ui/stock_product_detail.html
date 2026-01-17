@@ -14,6 +14,9 @@
     </div>
 
     <div class="d-flex gap-2">
+      {% if can_stock_products_create %}
+        <a class="btn btn-outline-primary" href="{% url 'ui:stock_product_edit' p.id %}">Modificar</a>
+      {% endif %}
       <a class="btn btn-outline-secondary" href="{% url 'ui:stock_products' %}">Volver</a>
     </div>
   </div>
@@ -116,7 +119,52 @@
     </div>
 
     <div class="col-12 col-lg-5">
+      {# ✅ Imagen del producto (robusto: usa vars del view, no accede directo a p.image.url) #}
       <div class="card">
+        <div class="card-body">
+          <h2 class="h6 mb-3">Imagen del producto</h2>
+
+          {% if product_image_url %}
+            <div class="d-flex align-items-center gap-3">
+              <a href="{{ product_image_url }}" target="_blank" rel="noopener">
+                <img
+                  src="{{ product_image_url }}"
+                  alt="Imagen de {{ p.name }}"
+                  class="rounded border"
+                  style="max-width:120px; max-height:120px;"
+                >
+              </a>
+
+              <div class="small">
+                <div class="mb-1">
+                  <a href="{{ product_image_url }}" target="_blank" rel="noopener">Abrir archivo</a>
+                </div>
+
+                <div class="text-muted">
+                  Fuente:
+                  {% if product_image_source_url %}
+                    <a href="{{ product_image_source_url }}" target="_blank" rel="noopener">ver URL</a>
+                  {% else %}
+                    -
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          {% else %}
+            <div class="text-muted">-</div>
+            <div class="text-muted small mt-2">
+              Fuente:
+              {% if product_image_source_url %}
+                <a href="{{ product_image_source_url }}" target="_blank" rel="noopener">ver URL</a>
+              {% else %}
+                -
+              {% endif %}
+            </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="card mt-3">
         <div class="card-body">
           <h2 class="h6 mb-3">Códigos</h2>
 

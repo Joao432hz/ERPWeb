@@ -156,6 +156,25 @@ def _display_value(v):
     return str(v).strip()
 
 
+def _pick_image_url_from_request(request) -> str:
+    """
+    Robusto: buscamos en varios nombres posibles para no depender del template/form actual.
+    Si no viene, devuelve "".
+    """
+    candidates = [
+        "image_url",
+        "smart_image_url",
+        "lookup_image_url",
+        "product_image_url",
+        "image_source_url",
+    ]
+    for k in candidates:
+        v = (request.POST.get(k) or "").strip()
+        if v:
+            return v
+    return ""
+
+
 @login_required
 def dashboard(request):
     context = _base_context(request.user)
@@ -169,7 +188,7 @@ def forbidden(request):
 
 
 # ============================================================
-# ✅ Stock: Productos (listado + alta + detalle)
+# ✅ Stock: Productos (listado + alta + detalle + edición)
 # ============================================================
 
 @login_required
@@ -179,7 +198,27 @@ def stock_products(request):
         return _forbidden(request, required_permission="stock.product.view")
 
     q = (request.GET.get("q") or "").strip()
-    qs = Product.objects.all().order_by("name")
+
+    # ✅ Default: ID DESC (mayor a menor)
+    sort = (request.GET.get("sort") or "id").strip()
+    direction = (request.GET.get("dir") or "desc").strip().lower()
+    if direction not in ("asc", "desc"):
+        direction = "desc"
+
+    # ✅ filtro Activo/Inactivo
+    raw_active = request.GET.get("active")
+    raw_inactive = request.GET.get("inactive")
+
+    # Si no envían ninguno, default: ambos chequeados (mostrar todo)
+    if raw_active is None and raw_inactive is None:
+        active_checked = True
+        inactive_checked = True
+    else:
+        active_checked = (raw_active == "1")
+        inactive_checked = (raw_inactive == "1")
+
+    qs = Product.objects.all()
+
     if q:
         qs = qs.filter(
             Q(name__icontains=q)
@@ -188,7 +227,81 @@ def stock_products(request):
             | Q(brand__icontains=q)
         )
 
-    context.update({"products": qs[:300], "q": q})
+    # Aplicar filtro de estado operativo
+    if active_checked and not inactive_checked:
+        qs = qs.filter(is_active=True)
+    elif inactive_checked and not active_checked:
+        qs = qs.filter(is_active=False)
+    elif not active_checked and not inactive_checked:
+        qs = qs.none()
+
+    # map de columnas sort permitidas
+    sort_map = {
+        "id": "id",
+        "sku": "sku",
+        "name": "name",
+        "brand": "brand",
+        "stock": "stock",
+        "status": "is_active",
+        "created": "created_at",
+        "updated": "updated_at",
+    }
+    sort_key = sort_map.get(sort, "id")
+    prefix = "" if direction == "asc" else "-"
+
+    # orden final + fallback estable (siempre)
+    qs = qs.order_by(f"{prefix}{sort_key}", "-id")
+
+    products = list(qs[:300])
+
+    def _sort_url(col: str) -> str:
+        next_dir = "asc"
+        if sort == col:
+            next_dir = "desc" if direction == "asc" else "asc"
+
+        params = {"q": q, "sort": col, "dir": next_dir}
+        if active_checked:
+            params["active"] = "1"
+        if inactive_checked:
+            params["inactive"] = "1"
+
+        return "?" + urlencode({k: v for k, v in params.items() if v not in (None, "")})
+
+    def _arrow(col: str) -> str:
+        if sort != col:
+            return ""
+        return "▲" if direction == "asc" else "▼"
+
+    context.update(
+        {
+            "products": products,
+            "q": q,
+            "sort": sort,
+            "dir": direction,
+            "active_checked": active_checked,
+            "inactive_checked": inactive_checked,
+            "sort_url": {
+                "id": _sort_url("id"),
+                "sku": _sort_url("sku"),
+                "name": _sort_url("name"),
+                "brand": _sort_url("brand"),
+                "stock": _sort_url("stock"),
+                "status": _sort_url("status"),
+                "created": _sort_url("created"),
+                "updated": _sort_url("updated"),
+            },
+            "sort_arrow": {
+                "id": _arrow("id"),
+                "sku": _arrow("sku"),
+                "name": _arrow("name"),
+                "brand": _arrow("brand"),
+                "stock": _arrow("stock"),
+                "status": _arrow("status"),
+                "created": _arrow("created"),
+                "updated": _arrow("updated"),
+            },
+        }
+    )
     return render(request, "ui/stock_products.html", context)
 
 
@@ -206,6 +319,7 @@ def stock_product_create(request):
 
     if request.method == "POST":
         if form.is_valid():
+            p = None
             try:
                 with transaction.atomic():
                     p: Product = form.save(commit=False)
@@ -213,6 +327,38 @@ def stock_product_create(request):
                     p.stock = 0
                     p.full_clean()
                     p.save()
+
+                # ✅ Post-save: si viene image_url (Smart Lookup), descargamos y persistimos
+                image_url = _pick_image_url_from_request(request)
+                if image_url:
+                    try:
+                        # Firma alineada con stock/models.py (set_image_from_url)
+                        saved = p.set_image_from_url(
+                            image_url,
+                            timeout_seconds=8,
+                            max_bytes=5 * 1024 * 1024,
+                            force=False,
+                        )
+                        if saved:
+                            # set_image_from_url ya setea image_source_url y el archivo en image
+                            p.full_clean()
+                            p.save(update_fields=["image", "image_source_url", "updated_at"])
+                        else:
+                            # Guardamos al menos la fuente si vino URL
+                            if hasattr(p, "image_source_url") and not (getattr(p, "image_source_url", "") or "").strip():
+                                p.image_source_url = image_url
+                            p.save(update_fields=["image_source_url", "updated_at"])
+                    except ValidationError as ve:
+                        # No bloquea la creación; solo informa
+                        if hasattr(ve, "message_dict"):
+                            for field, errs in ve.message_dict.items():
+                                for e in errs:
+                                    messages.warning(request, f"Imagen ({field}): {e}")
+                        else:
+                            for e in ve.messages:
+                                messages.warning(request, f"Imagen: {e}")
+                    except Exception as e:
+                        messages.warning(request, f"Imagen: no se pudo guardar desde URL ({e})")
 
                 messages.success(request, f"Producto creado: #{p.id} · {p.sku} - {p.name}")
                 return redirect("ui:stock_product_detail", pk=p.id)
@@ -232,6 +378,123 @@ def stock_product_create(request):
 
     context.update({"form": form})
     return render(request, "ui/stock_product_create.html", context)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def stock_product_edit(request, pk: int):
+    """
+    Editar producto (mantiene ID).
+    - Bajo ningún concepto toca/elimina/modifica cache Smart Lookup (ProductLookupCache).
+    - Permite modificar campos del producto y su imagen.
+    - Imagen:
+        - remove_image: quita imagen y limpia image_source_url.
+        - upload manual: reemplaza imagen (y limpia image_source_url).
+        - image_url (Smart Lookup): si no hubo upload manual ni remove_image, reemplaza vía set_image_from_url(force=True).
+    """
+    # Reusamos permiso existente para no inventar permisos nuevos
+    if not _has_perm(request, "stock.product.create"):
+        return _forbidden(request, required_permission="stock.product.create")
+
+    p = get_object_or_404(Product, pk=pk)
+
+    from ui.product_forms import ProductEditForm
+
+    form = ProductEditForm(request.POST or None, request.FILES or None, instance=p)
+
+    # Preview robusto para template
+    current_image_url = ""
+    try:
+        if getattr(p, "image", None):
+            current_image_url = p.image.url
+    except Exception:
+        current_image_url = ""
+
+    if request.method == "POST":
+        if form.is_valid():
+            try:
+                remove_image = bool(form.cleaned_data.get("remove_image"))
+                has_upload = bool(request.FILES and request.FILES.get("image"))
+
+                with transaction.atomic():
+                    prod: Product = form.save(commit=False)
+
+                    # Defensa: NO permitir que edición toque stock
+                    prod.stock = getattr(p, "stock", 0)
+
+                    if remove_image:
+                        # borrar archivo si existe (fail-safe)
+                        try:
+                            if getattr(prod, "image", None):
+                                prod.image.delete(save=False)
+                        except Exception:
+                            pass
+                        prod.image = None
+                        if hasattr(prod, "image_source_url"):
+                            prod.image_source_url = ""
+
+                    # Si hubo upload manual, se considera imagen "propia": limpiamos fuente
+                    if has_upload and hasattr(prod, "image_source_url"):
+                        prod.image_source_url = ""
+
+                    prod.full_clean()
+                    prod.save()  # ✅ mantiene PK/ID
+
+                # Post-save: si NO hubo upload manual y NO pidió remove_image, y viene image_url -> reemplazamos por URL
+                image_url = _pick_image_url_from_request(request)
+                if (not remove_image) and (not has_upload) and image_url:
+                    try:
+                        saved = prod.set_image_from_url(
+                            image_url,
+                            timeout_seconds=8,
+                            max_bytes=5 * 1024 * 1024,
+                            force=True,
+                        )
+                        if saved:
+                            prod.full_clean()
+                            prod.save(update_fields=["image", "image_source_url", "updated_at"])
+                        else:
+                            # al menos guardar la fuente (sin romper)
+                            if hasattr(prod, "image_source_url") and not (getattr(prod, "image_source_url", "") or "").strip():
+                                prod.image_source_url = image_url
+                            prod.save(update_fields=["image_source_url", "updated_at"])
+                    except ValidationError as ve:
+                        if hasattr(ve, "message_dict"):
+                            for field, errs in ve.message_dict.items():
+                                for e in errs:
+                                    messages.warning(request, f"Imagen ({field}): {e}")
+                        else:
+                            for e in ve.messages:
+                                messages.warning(request, f"Imagen: {e}")
+                    except Exception as e:
+                        messages.warning(request, f"Imagen: no se pudo guardar desde URL ({e})")
+
+                messages.success(request, f"Producto actualizado: #{prod.id} · {prod.sku} - {prod.name}")
+                return redirect("ui:stock_product_detail", pk=prod.id)
+
+            except ValidationError as ve:
+                if hasattr(ve, "message_dict"):
+                    for field, errs in ve.message_dict.items():
+                        for e in errs:
+                            messages.error(request, f"{field}: {e}")
+                else:
+                    for e in ve.messages:
+                        messages.error(request, e)
+            except Exception as e:
+                messages.error(request, f"No se pudo actualizar el producto: {e}")
+        else:
+            messages.error(request, "Revisá los errores del formulario.")
+
+    context = _base_context(request.user)
+    context.update(
+        {
+            "form": form,
+            "p": p,
+            "product_image_url": current_image_url,
+            "product_image_source_url": (getattr(p, "image_source_url", "") or "").strip(),
+        }
+    )
+    return render(request, "ui/stock_product_edit.html", context)
 
 
 @login_required
@@ -267,6 +530,13 @@ def stock_product_detail(request, pk: int):
         reverse("ui:stock_product_detail", kwargs={"pk": p.id})
     )
 
+    image_url = ""
+    try:
+        if getattr(p, "image", None):
+            image_url = p.image.url
+    except Exception:
+        image_url = ""
+
     context.update(
         {
             "p": p,
@@ -277,9 +547,10 @@ def stock_product_detail(request, pk: int):
             "purchase_cost_str": _money_str(_as_decimal(getattr(p, "purchase_cost", None)) or Decimal("0.00")),
             "sale_price_str": _money_str(_as_decimal(getattr(p, "sale_price", None)) or Decimal("0.00")),
             "tax_rate_str": _money_str(_as_decimal(getattr(p, "tax_rate", None)) or Decimal("0.00")),
-            # ✅ para códigos en template
             "barcode_value": barcode_value,
             "product_detail_url": product_detail_url,
+            "product_image_url": image_url,
+            "product_image_source_url": (getattr(p, "image_source_url", "") or "").strip(),
         }
     )
     return render(request, "ui/stock_product_detail.html", context)
@@ -332,9 +603,7 @@ def stock_product_labels(request, pk: int):
     context.update(
         {
             "p": p,
-            # compat: tu template usa product_detail_url
             "product_detail_url": product_detail_url,
-            # compat: por si quedó algo viejo
             "product_url": product_detail_url,
             "barcode_value": barcode_value,
         }
@@ -342,11 +611,6 @@ def stock_product_labels(request, pk: int):
     return render(request, "ui/stock_product_labels.html", context)
 
 
-# ✅ NUEVO: Barcode PNG (para mostrar imagen en detalle / impresión)
-# - Si SKU es numérico 13/12 -> EAN13 (estructura como retail)
-# - Si SKU es numérico 8 -> EAN8
-# - Caso contrario -> CODE128
-# - Ajustes: evitar solapamiento + número más chico
 @login_required
 @require_http_methods(["GET"])
 def stock_product_barcode_png(request, pk: int):
@@ -369,7 +633,6 @@ def stock_product_barcode_png(request, pk: int):
 
         if _is_digits(value):
             if len(value) == 13:
-                # EAN13 en python-barcode usa 12 dígitos y calcula checksum
                 barcode_cls = "EAN13"
                 payload = value[:12]
             elif len(value) == 12:
@@ -391,17 +654,12 @@ def stock_product_barcode_png(request, pk: int):
         code.write(
             bio,
             options={
-                # barras
                 "module_width": 0.25 if barcode_cls in ("EAN13", "EAN8") else 0.20,
                 "module_height": 16.0,
                 "quiet_zone": 2.0,
-
-                # texto
                 "write_text": True,
-                "font_size": 8,       # ✅ más chico
-                "text_distance": 4.0, # ✅ más separación (evita solape)
-
-                # calidad
+                "font_size": 8,
+                "text_distance": 4.0,
                 "dpi": 300,
             },
         )
@@ -411,7 +669,6 @@ def stock_product_barcode_png(request, pk: int):
         return HttpResponse(status=500)
 
 
-# ✅ NUEVO: QR PNG (URL al detalle del producto)
 @login_required
 @require_http_methods(["GET"])
 def stock_product_qr_png(request, pk: int):
@@ -1146,4 +1403,3 @@ def finance_movements(request):
 
     context.update({"movements": qs[:200], "q": q})
     return render(request, "ui/finance_movements.html", context)
-

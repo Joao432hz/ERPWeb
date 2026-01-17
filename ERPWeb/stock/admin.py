@@ -3,6 +3,12 @@ from django.core.exceptions import ValidationError
 
 from .models import Product, StockMovement
 
+# ✅ Import opcional (no rompe si en algún momento se renombra)
+try:
+    from .models import ProductLookupCache
+except Exception:
+    ProductLookupCache = None
+
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
@@ -30,8 +36,7 @@ class ProductAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
 
-    # 🔒 Sello extra (defensa en profundidad):
-    # si alguien intenta cambiar stock por algún camino, lo bloqueamos igual.
+    # 🔒 Defensa en profundidad
     def save_model(self, request, obj, form, change):
         if change and "stock" in getattr(form, "changed_data", []):
             raise ValidationError("El stock no se edita directo. Usá Movimientos de Stock (IN/OUT).")
@@ -60,3 +65,45 @@ class StockMovementAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+# ✅ Cache persistente de búsquedas (cuando exista)
+if ProductLookupCache is not None:
+
+    @admin.register(ProductLookupCache)
+    class ProductLookupCacheAdmin(admin.ModelAdmin):
+        # Lo que querías, pero con los campos reales
+        list_display = ("query_norm", "found", "hits", "updated_at")
+        list_filter = ("found", "kind", "created_at", "updated_at")
+        search_fields = ("query_norm", "query_raw")
+        ordering = ("-updated_at",)
+
+        # Cache: solo lectura (para evitar “toquetear” manualmente)
+        readonly_fields = (
+            "kind",
+            "query_norm",
+            "query_raw",
+            "found",
+            "expires_at",
+            "payload",
+            "hits",
+            "last_hit_at",
+            "created_at",
+            "updated_at",
+        )
+
+        def has_module_permission(self, request):
+            return request.user.is_superuser
+
+        def has_view_permission(self, request, obj=None):
+            return request.user.is_superuser
+
+        def has_add_permission(self, request):
+            return False
+
+        def has_change_permission(self, request, obj=None):
+            return False
+
+        def has_delete_permission(self, request, obj=None):
+            # Esto sí lo dejamos habilitado por si querés “limpiar cache”
+            return request.user.is_superuser

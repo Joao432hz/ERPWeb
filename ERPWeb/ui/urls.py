@@ -12,6 +12,10 @@ urlpatterns = [
     path("stock/products/", views.stock_products, name="stock_products"),
     path("stock/products/new/", views.stock_product_create, name="stock_product_create"),
     path("stock/products/<int:pk>/", views.stock_product_detail, name="stock_product_detail"),
+
+    # ✅ NUEVO: Editar producto (mantiene ID)
+    path("stock/products/<int:pk>/edit/", views.stock_product_edit, name="stock_product_edit"),
+
     path("stock/movements/", views.stock_movements, name="stock_movements"),
 
     # ✅ Movimientos por producto

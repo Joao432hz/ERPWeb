@@ -1,20 +1,20 @@
 {% extends "ui/base.html" %}
-{% block title %}Nuevo producto | ERPWeb{% endblock %}
+{% block title %}Modificar producto #{{ p.id }} | ERPWeb{% endblock %}
 
 {% block content %}
 <div class="d-flex align-items-start justify-content-between gap-3 flex-wrap mb-3">
   <div>
-    <h2 class="h4 mb-1">Stock · Nuevo producto</h2>
-    <div class="text-muted small">Cargá los datos base. El stock se administra por movimientos (IN/OUT).</div>
+    <h2 class="h4 mb-1">Stock · Modificar producto #{{ p.id }}</h2>
+    <div class="text-muted small">Editá los datos. El stock se administra por movimientos (IN/OUT).</div>
   </div>
   <div class="d-flex gap-2">
-    <a class="btn btn-outline-secondary" href="{% url 'ui:stock_products' %}">Volver</a>
+    <a class="btn btn-outline-secondary" href="{% url 'ui:stock_product_detail' p.id %}">Volver</a>
   </div>
 </div>
 
 <div class="card">
   <div class="card-body">
-    <form method="post" novalidate>
+    <form method="post" enctype="multipart/form-data" novalidate>
       {% csrf_token %}
 
       {# ✅ Imagen sugerida desde Smart Lookup (se persiste por POST) #}
@@ -39,7 +39,7 @@
             Algunos campos fueron sugeridos automáticamente. Revisá antes de guardar.
           </div>
 
-          {# ✅ Preview imagen aplicada al form (opcional) #}
+          {# Preview imagen sugerida (URL) #}
           <div id="formImgWrap" class="mt-2 d-none">
             <div class="d-flex align-items-center gap-2">
               <img
@@ -54,7 +54,7 @@
               </div>
             </div>
             <div class="text-muted small mt-1">
-              Se guardará como archivo al crear el producto.
+              Si guardás sin subir archivo, se intentará reemplazar la imagen con esta URL.
             </div>
           </div>
         </div>
@@ -113,17 +113,66 @@
           <label class="form-label">Marca</label>
           {{ form.brand }}
         </div>
+
+        <div class="col-12">
+          <hr class="my-2">
+          <h3 class="h6 mb-2">Imagen</h3>
+
+          {% if product_image_url %}
+            <div class="d-flex align-items-center gap-3 mb-2">
+              <a href="{{ product_image_url }}" target="_blank" rel="noopener">
+                <img
+                  src="{{ product_image_url }}"
+                  alt="Imagen actual"
+                  class="rounded border"
+                  style="max-width:120px; max-height:120px;"
+                >
+              </a>
+              <div class="small">
+                <div class="mb-1">
+                  <a href="{{ product_image_url }}" target="_blank" rel="noopener">Abrir archivo</a>
+                </div>
+                <div class="text-muted">
+                  Fuente:
+                  {% if product_image_source_url %}
+                    <a href="{{ product_image_source_url }}" target="_blank" rel="noopener">ver URL</a>
+                  {% else %}
+                    -
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          {% else %}
+            <div class="text-muted small mb-2">No hay imagen cargada.</div>
+          {% endif %}
+
+          <div class="row g-2 align-items-end">
+            <div class="col-12 col-md-6">
+              <label class="form-label">Subir nueva imagen (archivo)</label>
+              {{ form.image }}
+              <div class="text-muted small mt-1">Si subís un archivo, tendrá prioridad sobre la URL sugerida.</div>
+            </div>
+
+            <div class="col-12 col-md-6">
+              <div class="form-check mt-4">
+                {{ form.remove_image }}
+                <label class="form-check-label" for="id_remove_image">Quitar imagen</label>
+              </div>
+              <div class="text-muted small">Quita la imagen actual y limpia la fuente.</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="d-flex gap-2 mt-4">
-        <button class="btn btn-primary" type="submit">Guardar</button>
-        <a class="btn btn-outline-secondary" href="{% url 'ui:stock_products' %}">Cancelar</a>
+        <button class="btn btn-primary" type="submit">Guardar cambios</button>
+        <a class="btn btn-outline-secondary" href="{% url 'ui:stock_product_detail' p.id %}">Cancelar</a>
       </div>
     </form>
   </div>
 </div>
 
-<!-- Modal -->
+<!-- Modal Smart Lookup (idéntico al create) -->
 <div class="modal fade" id="smartLookupModal" tabindex="-1" aria-labelledby="smartLookupModalLabel" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
@@ -134,26 +183,20 @@
       </div>
 
       <div class="modal-body">
-
-        <!-- Estado / Spinner / Done -->
         <div id="smartLookupStatus" class="d-flex align-items-center gap-2">
-          <!-- Loading -->
           <div id="smartLookupStatusLoading" class="d-flex align-items-center gap-2">
             <div class="spinner-border" role="status" aria-hidden="true"></div>
             <div>Buscando información…</div>
           </div>
 
-          <!-- Done -->
           <div id="smartLookupStatusDone" class="d-none align-items-center gap-2 text-success">
             <span style="font-size:18px; line-height:1;">✅</span>
             <div>Búsqueda finalizada</div>
           </div>
         </div>
 
-        <!-- Error -->
         <div id="smartLookupError" class="alert alert-danger mt-3" style="display:none;"></div>
 
-        <!-- Resultado -->
         <div id="smartLookupResult" class="mt-3" style="display:none;">
           <div class="alert alert-warning mb-3">
             <strong>Datos sugeridos</strong> (revisá antes de aplicar). No se inventa información.
@@ -252,7 +295,6 @@ window.addEventListener("load", function () {
   }
 
   function setStatus(state) {
-    // state: "loading" | "done"
     statusEl.style.display = "flex";
     if (state === "loading") {
       statusLoadingEl.classList.remove("d-none");
@@ -340,7 +382,6 @@ window.addEventListener("load", function () {
 
     lastNormalized = data;
 
-    // ✅ la búsqueda terminó: cambiamos spinner por tilde
     setStatus("done");
 
     errorEl.style.display = "none";
@@ -358,7 +399,6 @@ window.addEventListener("load", function () {
       : String(data.nivel_confianza);
     setText("res_conf", conf);
 
-    // Imagen
     const img = document.getElementById("res_img");
     const imgLink = document.getElementById("res_img_link");
     const imgNone = document.getElementById("res_img_none");
@@ -375,7 +415,6 @@ window.addEventListener("load", function () {
       imgNone.style.display = "inline";
     }
 
-    // Sources
     clearSources();
     const sources = payload.sources || [];
     if (sources.length) {
@@ -423,7 +462,6 @@ window.addEventListener("load", function () {
       }
     });
 
-    // ✅ Imagen: si existe y aún no hay una aplicada, la guardamos para POST
     const currentImg = hiddenImageUrl ? (hiddenImageUrl.value || "").trim() : "";
     if (!currentImg && data.imagen_url) {
       setFormImage(data.imagen_url);
@@ -457,7 +495,6 @@ window.addEventListener("load", function () {
         body: JSON.stringify({ barcode: sku })
       });
 
-      // Siempre intentamos leer JSON, incluso en errores
       let payload = null;
       const contentType = (res.headers.get("content-type") || "").toLowerCase();
       if (contentType.includes("application/json")) {
@@ -475,7 +512,6 @@ window.addEventListener("load", function () {
         return;
       }
 
-      // OK
       renderResult(payload);
 
     } catch (e) {
@@ -491,14 +527,12 @@ window.addEventListener("load", function () {
     modal.hide();
   });
 
-  // ✅ limpiar imagen aplicada al form
   if (formImgClear) {
     formImgClear.addEventListener("click", function () {
       setFormImage("");
     });
   }
 
-  // Opcional: Ctrl/Cmd+Enter desde SKU
   if (skuInput) {
     skuInput.addEventListener("keydown", function (ev) {
       if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {

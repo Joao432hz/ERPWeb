@@ -2,7 +2,8 @@
 import json
 import os
 import re
-from typing import Any, Dict, Optional, Tuple, List
+from datetime import timedelta
+from typing import Any, Dict, Optional, Tuple, List, TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
@@ -14,9 +15,23 @@ from django.core.exceptions import ValidationError
 from django.contrib.auth.decorators import login_required
 from django.core.cache import cache
 from django.conf import settings
+from django.utils import timezone
+from django.db.models import F
 
 from security.decorators import require_permission
 from .models import Product, StockMovement
+
+# ✅ Cache persistente (DB) - import seguro
+try:
+    from .models import ProductLookupCache
+except Exception:
+    ProductLookupCache = None
+
+# ✅ Solo para type-checkers (Pylance) sin romper runtime cuando ProductLookupCache=None
+if TYPE_CHECKING:
+    from .models import ProductLookupCache as ProductLookupCacheType
+else:
+    ProductLookupCacheType = object
 
 
 def _json_body(request):
@@ -27,30 +42,18 @@ def _json_body(request):
 
 
 # ============================================================
-# ✅ Smart Lookup (v3.3) - Google-first (SerpAPI) + fallbacks + Heuristic extractor (NO IA)
-# - No escribe en DB
-# - Devuelve sugerencias normalizadas para autocompletar alta de producto
-# - Cache usando Django cache (configurable en settings.py)
-#   - TTL positivo: 7 días
-#   - TTL negativo: 12 hs
-# - Providers (orden):
-#   1) SerpAPI (Google engine)  ✅ PRIORITARIO
-#   2) Heuristic extractor (desde evidencia SerpAPI; determinístico)
-#   3) OpenFoodFacts (gratis) ✅ PUEDE CORREGIR heurística (precedencia)
-#   4) UPCItemDB (trial)
-# - force=true para saltar cache en pruebas
-# - debug_trace solo si DEBUG=True
+# ✅ Smart Lookup (v3.4) - DB cache-first + Google-first (SerpAPI) + fallbacks
+# - Primero busca en cache persistente (DB) para ahorrar SerpAPI
+# - Si NOT_FOUND en DB y NO expiró => devuelve directo
+# - Si cache miss (o expiró) => corre providers y guarda siempre en DB
+# - Mantiene Django cache como capa rápida adicional
 # ============================================================
 
 SMART_LOOKUP_TTL_SECONDS = 60 * 60 * 24 * 7   # 7 días (FOUND)
 SMART_LOOKUP_NEG_TTL_SECONDS = 60 * 60 * 12   # 12 hs (NOT_FOUND)
 
 _OFF_URL = "https://world.openfoodfacts.org/api/v0/product/{barcode}.json"
-
-# UPCItemDB (trial)
 _UPCITEMDB_TRIAL_URL = "https://api.upcitemdb.com/prod/trial/lookup"
-
-# SerpAPI
 _SERPAPI_URL = "https://serpapi.com/search.json"
 
 
@@ -59,10 +62,6 @@ def _cache_key(barcode: str) -> str:
 
 
 def _is_probable_barcode(s: str) -> bool:
-    """
-    Validación blanda:
-    - Longitud razonable 6..32 (EAN/SKU internos)
-    """
     if not s:
         return False
     if len(s) < 6 or len(s) > 32:
@@ -75,6 +74,27 @@ def _norm_string(v: Any) -> Optional[str]:
         return None
     s = str(v).strip()
     return s if s else None
+
+
+def _normalize_query(q: str) -> str:
+    """
+    Normalización estable para matching en DB cache.
+    - Trim
+    - Upper (para SKU alfanuméricos)
+    """
+    return (q or "").strip().upper()
+
+
+def _sanitize_payload_for_persistence(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Guardamos payload sin internals ruidosos.
+    - Siempre removemos debug_trace antes de persistir.
+    """
+    if not isinstance(payload, dict):
+        return {}
+    clean = dict(payload)
+    clean.pop("debug_trace", None)
+    return clean
 
 
 def _smart_response(
@@ -129,11 +149,6 @@ def _compute_suggested_and_missing(data: Dict[str, Any]) -> Tuple[list[str], lis
 
 
 def _merge_best(base: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Merge conservador:
-    - Si base no tiene un campo, lo toma de candidate.
-    - Nunca pisa un campo ya completo con None/vacío.
-    """
     out = dict(base)
     for k, v in candidate.items():
         if k not in out:
@@ -152,16 +167,6 @@ def _apply_source_precedence(
     fields: Tuple[str, ...],
     trace: list,
 ) -> Dict[str, Any]:
-    """
-    ✅ PASO 1: Precedencia controlada.
-    Permite que una fuente de mayor calidad (OpenFoodFacts) CORRIJA ciertos campos,
-    aunque el heurístico ya los haya completado.
-
-    - Solo pisa campos listados en `fields`.
-    - Solo pisa si `better_source` trae valor no vacío.
-    - No cambia shape de respuesta.
-    - Deja rastro en debug_trace (si DEBUG=True).
-    """
     if not better_source:
         return best
 
@@ -177,7 +182,6 @@ def _apply_source_precedence(
         if cur == bv:
             continue
 
-        # Pisamos solo si la fuente "mejor" tiene valor y es distinto
         out[f] = bv
         changed.append(f)
 
@@ -195,35 +199,101 @@ def _apply_source_precedence(
 
 
 # ============================================================
+# ✅ DB Cache helpers (ProductLookupCache)
+# ============================================================
+
+def _db_cache_get(barcode: str) -> Optional["ProductLookupCacheType"]:
+    if ProductLookupCache is None:
+        return None
+    qn = _normalize_query(barcode)
+    return ProductLookupCache.objects.filter(
+        kind=ProductLookupCache.KIND_BARCODE,
+        query_norm=qn,
+    ).first()
+
+
+def _db_cache_should_serve(entry: "ProductLookupCacheType") -> bool:
+    """
+    - FOUND => servir siempre
+    - NOT_FOUND => servir solo si no expiró
+    """
+    if getattr(entry, "found", False):
+        return True
+    expires_at = getattr(entry, "expires_at", None)
+    if expires_at and timezone.now() < expires_at:
+        return True
+    return False
+
+
+def _db_cache_mark_hit(entry: "ProductLookupCacheType") -> None:
+    if ProductLookupCache is None:
+        return
+    ProductLookupCache.objects.filter(pk=getattr(entry, "pk", None)).update(
+        hits=F("hits") + 1,
+        last_hit_at=timezone.now(),
+        updated_at=timezone.now(),
+    )
+
+
+def _db_cache_upsert(barcode: str, payload: Dict[str, Any], *, found: bool) -> None:
+    if ProductLookupCache is None:
+        return
+
+    now = timezone.now()
+    qn = _normalize_query(barcode)
+
+    expires_at = None
+    if not found:
+        expires_at = now + timedelta(seconds=SMART_LOOKUP_NEG_TTL_SECONDS)
+
+    clean_payload = _sanitize_payload_for_persistence(payload)
+
+    obj, created = ProductLookupCache.objects.get_or_create(
+        kind=ProductLookupCache.KIND_BARCODE,
+        query_norm=qn,
+        defaults={
+            "query_raw": (barcode or "").strip(),
+            "found": bool(found),
+            "expires_at": expires_at,
+            "payload": clean_payload,
+            "hits": 0,
+            "last_hit_at": None,
+        },
+    )
+
+    if not created:
+        obj.query_raw = (barcode or "").strip()
+        obj.found = bool(found)
+        obj.expires_at = expires_at
+        obj.payload = clean_payload
+        obj.save(update_fields=["query_raw", "found", "expires_at", "payload", "updated_at"])
+
+
+# ============================================================
 # ✅ Heuristic Extractor (sin IA)
 # ============================================================
 
 _WEIGHT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(kg|kgr|g|gr|mg|ml|l|lt|cc)\b", re.IGNORECASE)
 _PACK_RE = re.compile(r"\b(x|\*)\s?(\d{1,3})\b", re.IGNORECASE)
 
-# Keywords simples -> categorías genéricas (podés expandir esto con el tiempo)
 _CATEGORY_RULES = [
-    # Cuidado personal
     (re.compile(r"\b(shampoo|acondicionador|cabello|capilar)\b", re.I), "Cuidado personal · Cabello"),
     (re.compile(r"\b(jab[oó]n|gel de ducha|ducha)\b", re.I), "Cuidado personal · Higiene"),
     (re.compile(r"\b(desodorante|antitranspirante|talco|talquera|pies)\b", re.I), "Cuidado personal · Higiene"),
     (re.compile(r"\b(crema|loc[ií]on|hidratante)\b", re.I), "Cuidado personal · Piel"),
     (re.compile(r"\b(afeitar|shaving|after shave)\b", re.I), "Cuidado personal · Afeitado"),
 
-    # Alimentos / bebidas
     (re.compile(r"\b(yerba|mate)\b", re.I), "Alimentos · Infusiones"),
     (re.compile(r"\b(t[eé]|te en hebras|infusi[oó]n)\b", re.I), "Alimentos · Infusiones"),
     (re.compile(r"\b(galletitas|galletas|snack)\b", re.I), "Alimentos · Snacks"),
     (re.compile(r"\b(arroz|fideos|pastas)\b", re.I), "Alimentos · Secos"),
     (re.compile(r"\b(leche|yogur|queso)\b", re.I), "Alimentos · Lácteos"),
 
-    # Limpieza
     (re.compile(r"\b(lavandina|cloro|desinfectante)\b", re.I), "Hogar · Limpieza"),
     (re.compile(r"\b(detergente|lavavajillas)\b", re.I), "Hogar · Limpieza"),
     (re.compile(r"\b(lavandina|limpiador|multiuso)\b", re.I), "Hogar · Limpieza"),
 ]
 
-# Lista corta de dominios confiables (podés tunearla)
 _TRUSTED_DOMAIN_HINTS = [
     "carrefour", "coto", "disco", "jumbo", "vea",
     "farmacity", "simply", "dia", "changomas",
@@ -231,7 +301,6 @@ _TRUSTED_DOMAIN_HINTS = [
     "garbarino", "musimundo",
 ]
 
-# Algunas palabras que suelen “ensuciar” títulos
 _TITLE_SPLIT_TOKENS = ["|", " - ", " – ", " — ", " · "]
 
 
@@ -248,15 +317,12 @@ def _clean_title(title: Optional[str]) -> Optional[str]:
     t = _norm_string(title)
     if not t:
         return None
-    # corta en tokens tipo " - Sitio"
     for tok in _TITLE_SPLIT_TOKENS:
         if tok in t:
             parts = [p.strip() for p in t.split(tok) if p.strip()]
             if parts:
-                # Nos quedamos con el primer segmento, suele ser el producto
                 t = parts[0]
             break
-    # colapsa espacios
     t = re.sub(r"\s+", " ", t).strip()
     return t or None
 
@@ -269,11 +335,9 @@ def _extract_weight(text: str) -> Optional[str]:
         return None
     num = m.group(1).replace(",", ".")
     unit = m.group(2).lower()
-    # normaliza unidades
     unit_map = {"kgr": "kg", "gr": "g", "lt": "l"}
     unit = unit_map.get(unit, unit)
 
-    # intenta capturar pack "x N"
     pack = None
     pm = _PACK_RE.search(text)
     if pm:
@@ -285,23 +349,13 @@ def _extract_weight(text: str) -> Optional[str]:
 
 
 def _extract_brand(text: str) -> Optional[str]:
-    """
-    Heurística blanda:
-    - Busca patrones tipo "marca X" / "de X" (muy conservador).
-    - También detecta "Algabo" como ejemplo frecuente del caso real (podés sumar marcas luego).
-    """
     if not text:
         return None
-
-    # Patrón "marca: X" o "marca X"
     m = re.search(r"\bmarca[:\s]+([A-Za-z0-9ÁÉÍÓÚÑáéíóúñ'\-\.]{2,30})\b", text, flags=re.I)
     if m:
         return _norm_string(m.group(1))
-
-    # “Algabo” aparece mucho en cuidado personal (tu ejemplo)
     if re.search(r"\balgabo\b", text, flags=re.I):
         return "Algabo"
-
     return None
 
 
@@ -323,22 +377,19 @@ def _score_result(item: Dict[str, Any], barcode: str) -> int:
     haystack = f"{title} {snippet} {link}".lower()
 
     score = 0
-    if barcode and barcode in haystack:
+    if barcode and barcode.lower() in haystack:
         score += 3
 
-    # dominio “confiable” suma (sin pasarnos)
     for d in _TRUSTED_DOMAIN_HINTS:
         if d in host:
             score += 1
             break
 
-    # resultados vacíos penalizan
     if not title:
         score -= 1
     if not snippet:
         score -= 1
 
-    # penaliza PDFs / noticias (ruido)
     if ".pdf" in link.lower():
         score -= 2
 
@@ -359,12 +410,10 @@ def _heuristic_extract_from_evidence(barcode: str, evidence: Dict[str, Any], tra
     best_item = scored[0][1]
     best_score = scored[0][0]
 
-    # combinamos textos para extraer marca/cat/peso
     title_raw = best_item.get("title")
     snippet_raw = best_item.get("snippet")
     image_url = best_item.get("image") or best_item.get("thumbnail")
 
-    # ✅ MEJORA 1: si el mejor item no trae imagen, buscamos en los otros top results
     if not _norm_string(image_url):
         for it in top:
             cand = it.get("thumbnail") or it.get("image")
@@ -381,12 +430,6 @@ def _heuristic_extract_from_evidence(barcode: str, evidence: Dict[str, Any], tra
     marca = _extract_brand(combo)
     categoria = _infer_category(combo)
 
-    # nivel de confianza simple:
-    # - base 0.55
-    # - +0.10 si detecta peso
-    # - +0.10 si detecta marca
-    # - +0.05 si detecta categoria
-    # - +0.05 si score alto (>=3)
     conf = 0.55
     if peso:
         conf += 0.10
@@ -417,7 +460,6 @@ def _heuristic_extract_from_evidence(barcode: str, evidence: Dict[str, Any], tra
     )
 
     note = f"best_score={best_score}"
-    # warning si hay 2 candidatos muy cerca
     if len(scored) > 1 and (scored[0][0] - scored[1][0]) <= 0:
         note += " (multiple_candidates)"
 
@@ -426,7 +468,7 @@ def _heuristic_extract_from_evidence(barcode: str, evidence: Dict[str, Any], tra
 
 
 # ============================================================
-# ✅ Providers externos (sin cambios, salvo hardening OFF timeout)
+# ✅ Providers externos
 # ============================================================
 
 def _lookup_openfoodfacts(barcode: str, trace: list) -> Optional[Dict[str, Any]]:
@@ -434,7 +476,6 @@ def _lookup_openfoodfacts(barcode: str, trace: list) -> Optional[Dict[str, Any]]
     headers = {"User-Agent": "ERPWeb/1.0 (smart-lookup)"}
 
     try:
-        # ✅ MEJORA 2: timeout hardenizado (evita esperas largas)
         timeout = httpx.Timeout(connect=3.0, read=4.0, write=4.0, pool=4.0)
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
             r = client.get(url, headers=headers)
@@ -534,11 +575,6 @@ def _lookup_upcitemdb_trial(barcode: str, trace: list) -> Optional[Dict[str, Any
 
 
 def _lookup_serpapi_google(barcode: str, trace: list) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
-    """
-    SerpAPI (Google engine) – prioritaria.
-    Devuelve:
-      (candidate_normalized_or_None, evidence_dict)
-    """
     serp_key = getattr(settings, "SERPAPI_KEY", None) or os.getenv("SERPAPI_KEY")
     gl = getattr(settings, "SMART_LOOKUP_GL", None) or "ar"
     hl = getattr(settings, "SMART_LOOKUP_HL", None) or "es"
@@ -549,9 +585,6 @@ def _lookup_serpapi_google(barcode: str, trace: list) -> Tuple[Optional[Dict[str
         trace.append({"provider": "serpapi", "ok": False, "found": False, "note": "missing_key"})
         return None, evidence
 
-    # Dos intentos como máximo (no quemar cuota):
-    # 1) estilo “barcode producto”
-    # 2) “barcode” a secas
     queries = [
         f"{barcode} producto",
         f"\"{barcode}\"",
@@ -584,7 +617,6 @@ def _lookup_serpapi_google(barcode: str, trace: list) -> Tuple[Optional[Dict[str
                 snippet = _norm_string(item.get("snippet"))
                 link = _norm_string(item.get("link"))
                 source = _norm_string(item.get("source")) or _norm_string(item.get("displayed_link"))
-                # algunos results traen thumbnail, no siempre
                 thumb = _norm_string(item.get("thumbnail")) or _norm_string(item.get("image"))
                 if title or snippet or link:
                     top.append({
@@ -603,7 +635,6 @@ def _lookup_serpapi_google(barcode: str, trace: list) -> Tuple[Optional[Dict[str
             if not found:
                 continue
 
-            # Candidate conservador (base mínima)
             first = top[0]
             candidate = {
                 "codigo_barra": barcode,
@@ -642,9 +673,6 @@ def smart_product_lookup(request):
     """
     POST /api/stock/products/smart-lookup/
     Body: {"barcode": "<sku/ean/upc>", "force": true|false}
-
-    Devuelve:
-      SmartLookupResponse con data normalizada y fuentes.
     """
     body = _json_body(request)
     barcode = (body.get("barcode") or "").strip()
@@ -656,16 +684,49 @@ def smart_product_lookup(request):
     if not _is_probable_barcode(barcode):
         return JsonResponse({"detail": "barcode inválido (longitud/formato)"}, status=400)
 
+    # ============================================================
+    # 0) ✅ DB cache FIRST (salvo force=True)
+    # ============================================================
+    if not force and ProductLookupCache is not None:
+        entry = _db_cache_get(barcode)
+        if entry and _db_cache_should_serve(entry):
+            payload = dict(getattr(entry, "payload", None) or {})
+            payload["cached"] = True
+            payload.setdefault("warnings", [])
+            payload["warnings"] = list(payload.get("warnings") or [])
+            payload["warnings"].append("Resultado servido desde cache interno (DB).")
+            _db_cache_mark_hit(entry)
+            return JsonResponse(payload, status=200)
+
     key = _cache_key(barcode)
 
-    # 1) Cache (Django cache) - salvo que force=True
+    # ============================================================
+    # 1) Django cache (salvo force=True)
+    #    Si pega acá y DB aún no tiene registro, lo persistimos igual.
+    # ============================================================
     if not force:
         cached_payload = cache.get(key)
         if cached_payload:
             cached_payload = dict(cached_payload)
             cached_payload["cached"] = True
+            cached_payload.setdefault("warnings", [])
+            cached_payload["warnings"] = list(cached_payload.get("warnings") or [])
+            cached_payload["warnings"].append("Resultado servido desde cache rápido (Django cache).")
+
+            # Persistimos en DB cache para ahorrar futuras consultas aun si Django cache expira
+            if ProductLookupCache is not None:
+                data = (cached_payload.get("data") or {})
+                useful = any(
+                    data.get(k) not in (None, "", "-")
+                    for k in ("nombre", "marca", "categoria", "descripcion", "peso_volumen", "imagen_url")
+                )
+                _db_cache_upsert(barcode, cached_payload, found=bool(useful))
+
             return JsonResponse(cached_payload, status=200)
 
+    # ============================================================
+    # 2) Providers externos (orden actual)
+    # ============================================================
     trace: List[Dict[str, Any]] = []
     sources: List[Dict[str, Any]] = []
 
@@ -681,13 +742,13 @@ def smart_product_lookup(request):
         "nivel_confianza": None,
     }
 
-    # 2) Provider 1: SerpAPI (Google)
+    # Provider 1: SerpAPI (Google)
     serp_candidate, serp_evidence = _lookup_serpapi_google(barcode, trace)
     sources.append({"type": "api", "name": "SerpAPI (Google)", "url": _SERPAPI_URL})
     if serp_candidate:
         best = _merge_best(best, serp_candidate)
 
-    # 2b) Heuristic extractor (desde evidencia SerpAPI; NO IA; no pisa datos)
+    # Heuristic extractor (desde evidencia SerpAPI)
     heur_candidate = None
     if serp_evidence.get("top_results"):
         heur_candidate = _heuristic_extract_from_evidence(barcode, serp_evidence, trace)
@@ -695,14 +756,11 @@ def smart_product_lookup(request):
         if heur_candidate:
             best = _merge_best(best, heur_candidate)
 
-    # 3) Provider 2: OpenFoodFacts (fallback)
+    # Provider 2: OpenFoodFacts (fallback)
     off = _lookup_openfoodfacts(barcode, trace)
     sources.append({"type": "api", "name": "OpenFoodFacts", "url": _OFF_URL.format(barcode=barcode)})
     if off:
         best = _merge_best(best, off)
-
-        # ✅ PASO 1: precedencia OpenFoodFacts > heurística/serpapi en campos clave
-        # Corrige errores típicos como categoría mal inferida.
         best = _apply_source_precedence(
             best,
             off,
@@ -711,13 +769,15 @@ def smart_product_lookup(request):
             trace=trace,
         )
 
-    # 4) Provider 3: UPCItemDB trial (fallback)
+    # Provider 3: UPCItemDB (fallback)
     upc = _lookup_upcitemdb_trial(barcode, trace)
     sources.append({"type": "api", "name": "UPCItemDB (trial)", "url": f"{_UPCITEMDB_TRIAL_URL}?upc={barcode}"})
     if upc:
         best = _merge_best(best, upc)
 
-    # 5) FOUND / NOT_FOUND
+    # ============================================================
+    # 3) FOUND / NOT_FOUND
+    # ============================================================
     useful = any(
         best.get(k) not in (None, "", "-")
         for k in ("nombre", "marca", "categoria", "descripcion", "peso_volumen", "imagen_url")
@@ -737,16 +797,22 @@ def smart_product_lookup(request):
             cached=False,
             warnings=[
                 "No se encontró información suficiente.",
-                "Tip: probá force=true para reintentar sin cache.",
+                "Tip: este NOT_FOUND queda cacheado temporalmente para ahorrar cuota.",
+                "Podés usar force=true para reintentar sin cache.",
                 "Si SERPAPI_KEY no está configurada, se degradará a fallbacks estructurados.",
             ],
             evidence=serp_evidence if serp_evidence.get("top_results") else None,
             debug_trace=trace,
         )
+
+        # Persistir SIEMPRE en DB cache (NOT_FOUND con expiración)
+        if ProductLookupCache is not None:
+            _db_cache_upsert(barcode, payload, found=False)
+
         cache.set(key, payload, timeout=SMART_LOOKUP_NEG_TTL_SECONDS)
         return JsonResponse(payload, status=200)
 
-    # Fuente prioritaria (preferimos heuristic sobre serpapi, luego OFF, luego UPC)
+    # Fuente prioritaria
     if heur_candidate and any(heur_candidate.get(k) for k in ("nombre", "marca", "categoria", "descripcion", "peso_volumen", "imagen_url")):
         best["fuente_datos"] = "serpapi_heuristic"
         best["nivel_confianza"] = best.get("nivel_confianza") or (heur_candidate.get("nivel_confianza") or 0.70)
@@ -775,6 +841,11 @@ def smart_product_lookup(request):
         evidence=serp_evidence if serp_evidence.get("top_results") else None,
         debug_trace=trace,
     )
+
+    # Persistir SIEMPRE en DB cache (FOUND sin expiración)
+    if ProductLookupCache is not None:
+        _db_cache_upsert(barcode, payload, found=True)
+
     cache.set(key, payload, timeout=SMART_LOOKUP_TTL_SECONDS)
     return JsonResponse(payload, status=200)
 
